@@ -241,7 +241,7 @@
  "You can enter an access code again.": "You can enter an access code again.",
  "Premium title": "Premium title",
  "Enter your access code": "Enter your access code",
- "This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.": "This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.",
+ "Enter your 6-digit code to keep watching, or create one from your account.": "Enter your 6-digit code to keep watching, or create one from your account.",
  "Enter code": "Enter code",
  "Create code": "Create code",
  "To finish this title, enter your access code. Time left:": "To finish this title, enter your access code. Time left:",

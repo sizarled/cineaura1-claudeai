@@ -970,7 +970,7 @@
     "watch.lockoutOver": "You can enter an access code again.",
     "watch.gateEyebrow": "Premium title",
     "watch.gateTitle": "Enter your access code",
-    "watch.gateBody": "This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.",
+    "watch.gateBody": "Enter your 6-digit code to keep watching, or create one from your account.",
     "watch.gateEnter": "Enter code",
     "watch.gateCreate": "Create code",
     "watch.cdFinish": "To finish this title, enter your access code. Time left:",

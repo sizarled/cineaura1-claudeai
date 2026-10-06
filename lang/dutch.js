@@ -241,7 +241,7 @@
  "You can enter an access code again.": "Je kunt weer een code invoeren.",
  "Premium title": "Premiumtitel",
  "Enter your access code": "Voer je toegangscode in",
- "This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.": "Deze titel scoort 70 %+ op TMDB. Voer je code van 6 cijfers in om verder te kijken, of maak er een aan vanuit je account.",
+ "Enter your 6-digit code to keep watching, or create one from your account.": "Voer je code van 6 cijfers in om verder te kijken, of maak er een aan vanuit je account.",
  "Enter code": "Code invoeren",
  "Create code": "Code aanmaken",
  "To finish this title, enter your access code. Time left:": "Om deze titel af te maken, voer je toegangscode in. Resterende tijd:",
