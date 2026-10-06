@@ -413,7 +413,7 @@
     stopEmbed();
     showIdle();
     $("#player-gate").classList.add("show");
-    $("#create-code").href = isLoggedIn() ? "./dashboard.html" : "./login.html";
+    $("#create-code").href = isLoggedIn() ? "./dashboard.html#codes" : "./login.html";
     if (applyLockUI()) return;
     const msg = $("#gate-msg");
     msg.textContent = message || "";

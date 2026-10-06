@@ -241,7 +241,7 @@
  "You can enter an access code again.": "يمكنك إدخال رمز الدخول من جديد.",
  "Premium title": "عنوان مميّز",
  "Enter your access code": "أدخل رمز الدخول",
- "This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.": "هذا العنوان مُصنّف 70%+ على TMDB. أدخل رمزاً من 6 أرقام لتتابع المشاهدة، أو أنشئ واحداً من حسابك.",
+ "Enter your 6-digit code to keep watching, or create one from your account.": "أدخل رمزاً من 6 أرقام لتتابع المشاهدة، أو أنشئ واحداً من حسابك.",
  "Enter code": "أدخل الرمز",
  "Create code": "أنشئ رمزاً",
  "To finish this title, enter your access code. Time left:": "لإنهاء هذا العنوان، أدخل رمز الدخول. الوقت المتبقّي:",

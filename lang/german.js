@@ -241,7 +241,7 @@
  "You can enter an access code again.": "Sie können wieder einen Code eingeben.",
  "Premium title": "Premium-Titel",
  "Enter your access code": "Geben Sie Ihren Zugangscode ein",
- "This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.": "Dieser Titel ist mit 70 %+ auf TMDB bewertet. Geben Sie Ihren 6-stelligen Code ein, um weiterzusehen, oder erstellen Sie ihn über Ihr Konto.",
+ "Enter your 6-digit code to keep watching, or create one from your account.": "Geben Sie Ihren 6-stelligen Code ein, um weiterzusehen, oder erstellen Sie ihn über Ihr Konto.",
  "Enter code": "Code eingeben",
  "Create code": "Code erstellen",
  "To finish this title, enter your access code. Time left:": "Um diesen Titel zu beenden, geben Sie Ihren Zugangscode ein. Verbleibende Zeit:",
