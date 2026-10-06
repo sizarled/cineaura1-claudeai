@@ -98,19 +98,19 @@
             </div>
           </div>
           <div class="countdown-dock" id="countdown-dock">
-            <p>To finish this title, enter your access code. Time left: <strong id="countdown-time">05:00</strong></p>
-            <button class="btn btn-sm btn-primary" id="countdown-enter" type="button">Enter code</button>
+            <p><span data-i18n="watch.cdFinish">To finish this title, enter your access code. Time left:</span> <strong id="countdown-time">05:00</strong></p>
+            <button class="btn btn-sm btn-primary" id="countdown-enter" type="button" data-i18n="watch.gateEnter">Enter code</button>
           </div>
           <div class="player-gate" id="player-gate">
             <div class="glass gate-card">
-              <span class="eyebrow">Premium title</span>
-              <h2>Enter your access code</h2>
-              <p>This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.</p>
+              <span class="eyebrow" data-i18n="watch.gateEyebrow">Premium title</span>
+              <h2 data-i18n="watch.gateTitle">Enter your access code</h2>
+              <p data-i18n="watch.gateBody">This title is rated 70%+ on TMDB. Enter your 6-digit code to keep watching, or create one from your account.</p>
               <div class="gate-msg" id="gate-msg"></div>
               <input class="pin-input" id="code-input" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" />
               <div class="gate-actions">
-                <button class="btn btn-lg btn-primary" id="unlock-btn" type="button">Enter code</button>
-                <a class="btn btn-lg btn-ghost" id="create-code" href="./login.html">Create code</a>
+                <button class="btn btn-lg btn-primary" id="unlock-btn" type="button" data-i18n="watch.gateEnter">Enter code</button>
+                <a class="btn btn-lg btn-ghost" id="create-code" href="./login.html" data-i18n="watch.gateCreate">Create code</a>
               </div>
             </div>
           </div>
