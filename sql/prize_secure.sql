@@ -1,7 +1,7 @@
 -- ============================================================
 -- Prize security + server-side logic
--- Run once in the Supabase SQL editor AFTER panel.sql, prize_center.sql,
--- prize_modes.sql, prize_admin.sql and points.sql (safe to run again).
+-- Run once in the Supabase SQL editor AFTER profile.sql, panel.sql,
+-- prize_center.sql, prize_modes.sql, prize_admin.sql and points.sql (safe to run again).
 --
 -- What it does
 --   1. Staff passwords are re-hashed with bcrypt (salted). Panel login now goes
@@ -21,7 +21,7 @@
 --
 -- ORDER: always run this file LAST, and run it again after re-running panel.sql,
 -- prize_center.sql, prize_modes.sql or prize_admin.sql (those files re-create the old
--- open policies that this file removes).
+-- open policies that this file removes). Make sure profile.sql is installed for notifications.
 --
 -- NOT covered here (needs Supabase Auth, a separate migration): member identity.
 -- Members still sign in with the custom login, so the member RPCs trust the member id
@@ -30,6 +30,10 @@
 -- ============================================================
 
 create extension if not exists pgcrypto with schema extensions;
+
+-- Prize winners can request fulfillment once they are selected.
+alter table public.prize_mode_entries add column if not exists claim_requested_at timestamptz;
+alter table public.winners add column if not exists claim_requested_at timestamptz;
 
 -- ------------------------------------------------------------------ 1. staff
 create table if not exists public.staff_sessions (
@@ -248,6 +252,63 @@ begin
   e := case when coalesce(md.unlimited_time, false) then null else coalesce(md.ends_at, p.ends_at) end;
 end $$;
 
+-- Insert in-app notifications without exposing writes to the browser.
+create or replace function public._notify_prize_staff(p_prize_id bigint, p_member text, p_kind text)
+returns int language plpgsql security definer set search_path = public as $$
+declare p public.prizes; m public.members; n int := 0; note_title text;
+begin
+  if to_regclass('public.notifications') is null then return 0; end if;
+  select * into p from public.prizes where id = p_prize_id;
+  if not found then return 0; end if;
+  select * into m from public.members where member_id = p_member;
+  if not found then return 0; end if;
+  note_title := case when p_kind = 'prize_win' then 'Prize winner' else 'Prize claim request' end;
+  insert into public.notifications (member_id, kind, title, body, href, from_id, from_username)
+  select s.member_id, p_kind, note_title,
+         coalesce(nullif(m.username, ''), p_member) || ' · ' || p.title,
+         './Panel.html?section=prizes', p_member, coalesce(m.username, '')
+  from public.staff s
+  where s.role in ('super', 'admin', 'moderator')
+    and coalesce(s.member_id, '') <> ''
+    and s.member_id <> p_member;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- Notify active members who can see at least one mode of a newly published prize.
+create or replace function public._notify_new_prize(p_prize_id bigint)
+returns int language plpgsql security definer set search_path = public as $$
+declare p public.prizes; n int := 0;
+begin
+  if to_regclass('public.notifications') is null then return 0; end if;
+  select * into p from public.prizes where id = p_prize_id;
+  if not found then return 0; end if;
+  if coalesce(p.status, 'active') = 'ended' then return 0; end if;
+  insert into public.notifications (member_id, kind, title, body, href, from_id, from_username)
+  select m.member_id, 'prize_new', 'New prize available', p.title,
+         './Prize.html?GroupPrize=' || coalesce(p.group_id, 0)::text || '&Prize=' || p.id::text,
+         '', ''
+  from public.members m
+  where coalesce(m.member_id, '') <> '' and lower(coalesce(m.status, '')) = 'active'
+    and not exists (select 1 from public.prize_groups g where g.id = p.group_id and g.visible = false)
+    and exists (
+      select 1 from public.prize_modes pm
+      where pm.prize_id = p.id and public._aud_ok(pm.config->'audience', m)
+    )
+    and (
+      coalesce(p.visibility, 'public') <> 'private'
+      or exists (
+        select 1 from unnest(regexp_split_to_array(lower(coalesce(p.allowed_usernames, '')), '[,;]+')) as allowed(name)
+        where trim(allowed.name) in (lower(m.member_id), lower(coalesce(m.username, '')))
+      )
+    );
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+revoke all on function public._notify_prize_staff(bigint, text, text) from public, anon, authenticated;
+revoke all on function public._notify_new_prize(bigint) from public, anon, authenticated;
+
 create or replace function public._points(p_member text) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare pr record; earned int; sh int; pl int; rc int; cm int;
@@ -255,7 +316,7 @@ begin
   select coalesce(private_minutes, 0) + coalesce(public_minutes, 0) as mins, coalesce(points_spent, 0) as spent into pr
   from public.profiles where member_id = p_member;
   if not found then return jsonb_build_object('earned', 0, 'spent', 0, 'available', 0); end if;
-  select count(*) into sh from public.post_events where kind = 'share' and member_id = p_member;
+  select count(*) into sh from public.post_events where kind = 'share' and network = 'referral' and member_id = p_member;
   select count(*) into pl from public.playlists where owner_id = p_member and visibility in ('public', 'exclusive');
   select count(*) into rc from public.posts where owner_id = p_member and kind in ('recommendation', 'reclist') and visibility in ('public', 'exclusive');
   select count(*) into cm from public.comments where member_id = p_member;
@@ -297,7 +358,7 @@ create trigger profiles_guard_points before insert or update on public.profiles
 create or replace function public._activity(p_member text, p_since timestamptz) returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
-    'link_shares', (select count(*) from public.post_events where kind = 'share' and member_id = p_member and created_at >= p_since),
+    'link_shares', (select count(*) from public.post_events where kind = 'share' and network = 'referral' and member_id = p_member and created_at >= p_since),
     'playlists', (select count(*) from public.playlists where owner_id = p_member and visibility in ('public', 'exclusive') and created_at >= p_since),
     'recommendations', (select count(*) from public.posts where owner_id = p_member and kind in ('recommendation', 'reclist') and visibility in ('public', 'exclusive') and created_at >= p_since),
     'comments', (select count(*) from public.comments where member_id = p_member and created_at >= p_since),
@@ -324,6 +385,7 @@ begin
     update public.prize_mode_entries set status = 'winner', lottery_wins = coalesce(lottery_wins, 0) + 1 where id = r.id;
     insert into public.winners (prize_title, member_id, minutes_paid, group_name, ends_at)
     values (pz.title, r.member_id, coalesce(md.points_cost, 0), coalesce(pz.group_name, ''), null);
+    perform public._notify_prize_staff(pz.id, r.member_id, 'prize_win');
     n := n + 1;
   end loop;
   return n;
@@ -382,22 +444,31 @@ begin
 
   -- legacy prize-wide visibility
   if coalesce(pz.visibility, 'public') = 'private' then
-    names := string_to_array(lower(coalesce(pz.allowed_usernames, '')), ',');
-    if not (lower(m.member_id) = any (select trim(x) from unnest(names) x) or lower(m.username) = any (select trim(x) from unnest(names) x)) then
-      return jsonb_build_object('ok', false, 'error', 'audience');
-    end if;
+    names := regexp_split_to_array(lower(coalesce(pz.allowed_usernames, '')), '[,;]+');
+    if not exists (
+      select 1 from unnest(names) as allowed(name)
+      where trim(allowed.name) in (lower(m.member_id), lower(m.username))
+    ) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
   elsif coalesce(pz.visibility, 'public') = 'exclusive' then
-    if coalesce(pz.countries, '') <> '' and not (lower(coalesce(m.country, '')) = any (select trim(x) from unnest(string_to_array(lower(pz.countries), ',')) x)) then
-      return jsonb_build_object('ok', false, 'error', 'audience');
-    end if;
+    if coalesce(pz.countries, '') <> '' and not exists (
+      select 1 from unnest(regexp_split_to_array(lower(pz.countries), '[,;]+')) as allowed(name)
+      where trim(allowed.name) = lower(coalesce(m.country, ''))
+    ) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
     if pz.min_age is not null and (m.birth_date is null or date_part('year', age(today, m.birth_date)) < pz.min_age) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
     if pz.max_age is not null and (m.birth_date is null or date_part('year', age(today, m.birth_date)) > pz.max_age) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
+    if pz.watched_tmdb is not null and coalesce(pz.watched_type, '') <> '' and not exists (
+      select 1 from public.hestory h
+      where h.visitor_id = p_member and h.tmdb_id = pz.watched_tmdb and h.media_type = pz.watched_type
+    ) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
   end if;
 
   select * into w from public._window(pz, md, m.country);
   if w.s is not null and w.s > today then return jsonb_build_object('ok', false, 'error', 'not_started'); end if;
   if p_mode <> 'lottery' and w.e is not null and w.e < today then return jsonb_build_object('ok', false, 'error', 'closed'); end if;
   if not public._aud_ok(md.config->'audience', m) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
+  if coalesce(pz.minutes_required, 0) > coalesce((select coalesce(private_minutes, 0) + coalesce(public_minutes, 0) from public.profiles where member_id = p_member), 0) then
+    return jsonb_build_object('ok', false, 'error', 'incomplete');
+  end if;
   if exists (select 1 from public.prize_mode_entries where mode_id = md.id and member_id = p_member) then
     return jsonb_build_object('ok', false, 'error', 'already');
   end if;
@@ -447,6 +518,7 @@ begin
     insert into public.winners (prize_title, member_id, minutes_paid, group_name, ends_at)
     values (pz.title, p_member, cost, coalesce(pz.group_name, ''), w.e);
     update public.prizes set winners_count = coalesce(winners_count, 0) + 1 where id = p_prize;
+    perform public._notify_prize_staff(pz.id, p_member, 'prize_win');
   end if;
   if p_mode = 'lottery' and md.draw_at is not null
      and (select count(*) from public.prize_mode_entries where mode_id = md.id) >= md.draw_at
@@ -462,6 +534,24 @@ begin
   update public.prize_mode_entries set status = 'withdrawn', withdrawn_at = now()
   where id = p_entry and member_id = p_member and status = 'competitor' and mode <> 'gift';
   return jsonb_build_object('ok', found);
+end $$;
+
+-- A selected winner can ask the team to arrange prize fulfillment. Locking the
+-- entry makes this idempotent: repeated clicks produce only one staff alert.
+create or replace function public.prize_request_claim(p_member text, p_entry bigint)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare e public.prize_mode_entries;
+begin
+  select * into e from public.prize_mode_entries
+  where id = p_entry and member_id = p_member for update;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_winner'); end if;
+  if e.status <> 'winner' then return jsonb_build_object('ok', false, 'error', 'not_winner'); end if;
+  if e.claim_requested_at is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'requested_at', e.claim_requested_at);
+  end if;
+  update public.prize_mode_entries set claim_requested_at = now() where id = e.id;
+  perform public._notify_prize_staff(e.prize_id, p_member, 'prize_claim');
+  return jsonb_build_object('ok', true, 'already', false);
 end $$;
 
 -- Challenge: the first members who finish every requirement in time win.
@@ -498,6 +588,7 @@ begin
   update public.prize_mode_entries set status = 'winner' where id = e.id;
   insert into public.winners (prize_title, member_id, minutes_paid, group_name, ends_at)
   values (pz.title, p_member, coalesce(e.points_paid, 0), coalesce(pz.group_name, ''), md.ends_at);
+  perform public._notify_prize_staff(pz.id, p_member, 'prize_win');
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -529,21 +620,56 @@ end $$;
 -- Prizes that have no subscription modes (dashboard "claim"). Prizes with modes are joined with prize_join.
 create or replace function public.prize_claim_simple(p_member text, p_prize bigint)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare m public.members; pz public.prizes; today date := current_date;
+declare
+  m public.members;
+  pz public.prizes;
+  pr public.profiles;
+  today date := current_date;
+  yrs int;
 begin
-  perform 1 from public.profiles where member_id = p_member for update;
+  select * into pr from public.profiles where member_id = p_member for update;
   select * into m from public.members where member_id = p_member;
   if not found or m.status <> 'active' then return jsonb_build_object('ok', false, 'error', 'inactive'); end if;
   select * into pz from public.prizes where id = p_prize for update;
   if not found or coalesce(pz.status, 'active') = 'ended' then return jsonb_build_object('ok', false, 'error', 'closed'); end if;
   if exists (select 1 from public.prize_modes where prize_id = p_prize) then return jsonb_build_object('ok', false, 'error', 'use_modes'); end if;
+  if exists (select 1 from public.winners where member_id = p_member and prize_title = pz.title) then
+    return jsonb_build_object('ok', false, 'error', 'already');
+  end if;
   if pz.starts_at is not null and pz.starts_at > today then return jsonb_build_object('ok', false, 'error', 'not_started'); end if;
   if not coalesce(pz.unlimited_time, false) and pz.ends_at is not null and pz.ends_at < today then return jsonb_build_object('ok', false, 'error', 'closed'); end if;
   if pz.quantity is not null and coalesce(pz.winners_count, 0) >= pz.quantity then return jsonb_build_object('ok', false, 'error', 'sold_out'); end if;
-  if not public._spend(p_member, coalesce(pz.minutes_required, 0)) then return jsonb_build_object('ok', false, 'error', 'points', 'need', pz.minutes_required); end if;
-  insert into public.winners (prize_title, member_id, minutes_paid, group_name) values (pz.title, p_member, coalesce(pz.minutes_required, 0), coalesce(pz.group_name, ''));
+
+  if coalesce(pz.visibility, 'public') = 'private' and not exists (
+    select 1 from unnest(regexp_split_to_array(lower(coalesce(pz.allowed_usernames, '')), '[,;]+')) as allowed(name)
+    where trim(allowed.name) in (lower(m.member_id), lower(m.username))
+  ) then
+    return jsonb_build_object('ok', false, 'error', 'audience');
+  elsif coalesce(pz.visibility, 'public') = 'exclusive' then
+    if coalesce(pz.countries, '') <> '' and not exists (
+      select 1 from unnest(regexp_split_to_array(lower(pz.countries), '[,;]+')) as allowed(name)
+      where trim(allowed.name) = lower(coalesce(m.country, ''))
+    ) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
+    yrs := case when m.birth_date is null then null else date_part('year', age(today, m.birth_date))::int end;
+    if pz.min_age is not null and (yrs is null or yrs < pz.min_age) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
+    if pz.max_age is not null and (yrs is null or yrs > pz.max_age) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
+    if pz.watched_tmdb is not null and coalesce(pz.watched_type, '') <> '' and not exists (
+      select 1 from public.hestory h
+      where h.visitor_id = p_member and h.tmdb_id = pz.watched_tmdb and h.media_type = pz.watched_type
+    ) then return jsonb_build_object('ok', false, 'error', 'audience'); end if;
+  end if;
+
+  if coalesce(pr.private_minutes, 0) + coalesce(pr.public_minutes, 0) < greatest(0, coalesce(pz.minutes_required, 0)) then
+    return jsonb_build_object('ok', false, 'error', 'incomplete');
+  end if;
+  if not public._spend(p_member, coalesce(pz.minutes_required, 0)) then
+    return jsonb_build_object('ok', false, 'error', 'points', 'need', pz.minutes_required);
+  end if;
+  insert into public.winners (prize_title, member_id, minutes_paid, group_name, claim_requested_at)
+  values (pz.title, p_member, coalesce(pz.minutes_required, 0), coalesce(pz.group_name, ''), now());
   update public.prizes set winners_count = coalesce(winners_count, 0) + 1 where id = p_prize;
-  return jsonb_build_object('ok', true);
+  perform public._notify_prize_staff(pz.id, p_member, 'prize_claim');
+  return jsonb_build_object('ok', true, 'cost', coalesce(pz.minutes_required, 0));
 end $$;
 
 -- ------------------------------------------------------------------ 4. staff prize RPCs
@@ -702,6 +828,7 @@ begin
               nullif(r->>'expires_at', '')::timestamptz, (r->>'max_uses')::int);
     end if;
   end loop;
+  if p_id is null then perform public._notify_new_prize(pid); end if;
   return jsonb_build_object('ok', true, 'id', pid);
 exception
   when unique_violation then return jsonb_build_object('ok', false, 'error', 'duplicate');
@@ -752,6 +879,7 @@ begin
     if not exists (select 1 from public.winners where prize_title = pz.title and member_id = e.member_id) then
       insert into public.winners (prize_title, member_id, minutes_paid, group_name, ends_at) values (pz.title, e.member_id, coalesce(e.points_paid, 0), coalesce(pz.group_name, ''), pz.ends_at);
     end if;
+    if lower(coalesce(e.status, '')) <> 'winner' then perform public._notify_prize_staff(pz.id, e.member_id, 'prize_win'); end if;
   elsif p_action in ('excluded', 'competitor') then
     update public.prize_mode_entries set status = p_action, banned_until = case when p_action = 'competitor' then null else banned_until end, status_by = coalesce(p_by, '') where id = e.id;
     delete from public.winners where prize_title = pz.title and member_id = e.member_id;
@@ -929,10 +1057,15 @@ begin
   for f in select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname in (
              'staff_login','staff_session','staff_logout','staff_setup_super','staff_add','staff_set_sections','staff_remove','staff_set_password',
-             'prize_coupon_check','prize_join','prize_subscribe_plain','prize_withdraw','prize_claim_challenge','prize_log_visit','prize_claim_simple',
+             'prize_coupon_check','prize_join','prize_subscribe_plain','prize_withdraw','prize_request_claim','prize_claim_challenge','prize_log_visit','prize_claim_simple',
              'prize_admin_save','prize_admin_end','prize_admin_delete','prize_admin_entry','prize_admin_limits','prize_admin_group',
              'prize_admin_codes','prize_admin_overview','prize_admin_stats')
   loop
     execute format('grant execute on function %s to anon, authenticated', f.sig);
   end loop;
 end $$;
+
+revoke all on function public._notify_prize_staff(bigint, text, text) from public, anon, authenticated;
+revoke all on function public._notify_new_prize(bigint) from public, anon, authenticated;
+
+notify pgrst, 'reload schema';

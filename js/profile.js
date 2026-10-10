@@ -552,7 +552,7 @@
         <div class="note-row">
           <div></div>
           <div>
-            <strong>${escapeHtml(n.title || n.kind)}</strong>
+            <strong>${escapeHtml(tr(n.title || n.kind))}</strong>
             <div class="muted">${escapeHtml(n.body || "")} · ${String(n.created_at||"").slice(0,16).replace("T"," ")}</div>
           </div>
         </div>`).join("")
@@ -2499,8 +2499,8 @@
   }
 
   /* --- Tab 2: Analytics posts ---
-     Impressions, link clicks and shares come from public.post_events; the
-     recommends and "don't recommend" counts come from public.post_votes. */
+     Impressions, link clicks and successful referral sign-ups come from
+     public.post_events; the recommends and "don't recommend" counts come from public.post_votes. */
   const ANALYTICS_COLS = [
     ["imp", "pa.impressions"],
     ["up", "pa.recs"],
@@ -2519,12 +2519,12 @@
     const ids = all.map((p) => p.post_id);
     const list = ids.join(",");
     const q = rangeQuery(bounds);
-    const events = (kind) =>
-      supabaseRequest(`/rest/v1/post_events?post_id=in.(${list})&kind=eq.${kind}${q}&select=post_id`);
+    const events = (kind, extra = "") =>
+      supabaseRequest(`/rest/v1/post_events?post_id=in.(${list})&kind=eq.${kind}${extra}${q}&select=post_id`);
     const [imp, clk, shr, votes] = await Promise.all([
       events("impression"),
       events("click"),
-      events("share"),
+      events("share", "&network=eq.referral"),
       supabaseRequest(`/rest/v1/post_votes?post_id=in.(${list})${q}&select=post_id,vote`),
     ]);
     // The events table is optional: without sql/post_analytics.sql the votes

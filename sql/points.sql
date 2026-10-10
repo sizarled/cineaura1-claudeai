@@ -6,20 +6,20 @@
 --
 --   1 watch minute — watched by the member, or watched by someone
 --                    through a link the member published   = 1 point
---   5 link shares done by the member                        = 1 point
+--   5 new-member registrations attributed to the member's shared links = 1 point
 --   10 public or exclusive playlists created by the member  = 1 point
 --   50 public or exclusive recommendations created by the
 --      member (including the ones posted in a recommendation
 --      list)                                                = 1 point
 --   100 comments written by the member                      = 1 point
 --
--- Fractions are dropped: 12 shares are worth 2 points, not 2.4.
+-- Fractions are dropped: 12 referred registrations are worth 2 points, not 2.4.
 --
--- Nothing is stored per source. Every count is read live from the table that
--- already records the activity, so there is no ledger to keep in sync:
+-- Point totals are not stored per source. Counts are read live from the activity
+-- tables; the private member_referrals table only guarantees one conversion per new account:
 --
 --   minutes          profiles.private_minutes + profiles.public_minutes
---   shares           post_events      where kind = 'share' and member_id = me
+--   shares           post_events      where kind = 'share', network = 'referral', and member_id = me
 --   playlists        playlists        where owner_id = me
 --                                     and visibility in ('public','exclusive')
 --   recommendations  posts            where owner_id = me
@@ -64,14 +64,14 @@ where p.member_id = w.member_id
   and coalesce(p.points_spent, 0) = 0
   and coalesce(w.paid, 0) > 0;
 
--- 3) The share counter reads post_events, so make sure a share always carries
---    the member who did it (a signed-out visitor cannot earn points).
+-- 3) Referral conversions are created by the members registration trigger;
+--    the browser cannot insert or edit/delete a share conversion directly.
 comment on column public.post_events.member_id is
-  'Member who triggered the event; 5 shares by one member earn that member 1 point.';
+  'Member whose shared post link generated the new registration; 5 new registrations earn 1 point.';
 
 -- 4) Indexes for the five counters, so counting a member stays cheap.
-create index if not exists post_events_share_member_idx
-  on public.post_events (member_id) where kind = 'share';
+create index if not exists post_events_referral_member_idx
+  on public.post_events (member_id, created_at desc) where kind = 'share' and network = 'referral';
 create index if not exists playlists_owner_vis_idx
   on public.playlists (owner_id, visibility);
 create index if not exists posts_owner_kind_vis_idx

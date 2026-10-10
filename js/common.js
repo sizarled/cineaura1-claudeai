@@ -4,6 +4,8 @@
   const IMG = "https://image.tmdb.org/t/p";
   const SESSION_KEY = "cineaura_session";
   const CODE_KEY = "cineaura_access_code";
+  const REFERRAL_KEY = "cineaura_share_referral";
+  const REFERRAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
   const LANG_KEY = "cineaura_lang";
   const THEME_KEY = "cineaura_theme";
   const LANGS = window.CineAuraLangs || ["en", "ar", "fr", "de", "es", "nl", "it"];
@@ -31,6 +33,73 @@
       return null;
     }
   }
+
+  function validReferralMemberId(value) {
+    return /^ID[0-9]{1,20}$/.test(String(value || ""));
+  }
+
+  function validReferralPostId(value) {
+    return /^[A-Za-z0-9._-]{1,80}$/.test(String(value || ""));
+  }
+
+  function captureShareReferral() {
+    try {
+      const url = new URL(location.href);
+      const referrerId = url.searchParams.get("ca_ref");
+      const postId = url.searchParams.get("ca_post");
+      if (referrerId === null && postId === null) return;
+
+      if (validReferralMemberId(referrerId) && validReferralPostId(postId) && !getSession()?.member_id) {
+        localStorage.setItem(
+          REFERRAL_KEY,
+          JSON.stringify({ referrer_member_id: referrerId, referred_post_id: postId, captured_at: Date.now() })
+        );
+      }
+
+      // Keep the attribution in local storage, not in the address bar. The
+      // post's own query (for example ?post=P123) remains untouched.
+      url.searchParams.delete("ca_ref");
+      url.searchParams.delete("ca_post");
+      history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+      /* referral tracking is optional; never block the page */
+    }
+  }
+
+  function getReferralAttribution() {
+    try {
+      const value = JSON.parse(localStorage.getItem(REFERRAL_KEY) || "null");
+      const age = Date.now() - Number(value?.captured_at || 0);
+      if (
+        !value ||
+        !validReferralMemberId(value.referrer_member_id) ||
+        !validReferralPostId(value.referred_post_id) ||
+        !Number.isFinite(age) ||
+        age < 0 ||
+        age > REFERRAL_TTL_MS ||
+        getSession()?.member_id
+      ) {
+        if (value) localStorage.removeItem(REFERRAL_KEY);
+        return null;
+      }
+      return {
+        referred_by_member_id: value.referrer_member_id,
+        referred_post_id: value.referred_post_id,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function clearReferralAttribution() {
+    try {
+      localStorage.removeItem(REFERRAL_KEY);
+    } catch {
+      /* storage may be disabled */
+    }
+  }
+
+  captureShareReferral();
 
   function isLoggedIn() {
     return Boolean(getSession());
@@ -791,17 +860,27 @@
     }));
   }
 
-  // Markup for one share row. `href` is the page-relative link of the thing
-  // being shared (post, playlist, profile, watch page), `text` its caption.
+  function referralShareUrl(href, postId, referrerId) {
+    const url = new URL(absoluteUrl(href));
+    if (validReferralMemberId(referrerId) && validReferralPostId(postId)) {
+      url.searchParams.set("ca_ref", referrerId);
+      url.searchParams.set("ca_post", postId);
+    }
+    return url.href;
+  }
+
+  // Markup for one share row. Tracked post links carry referral attribution;
+  // a share is only credited after a new visitor completes registration.
   function shareRowHtml(href, text, opts = {}) {
-    const url = absoluteUrl(href);
+    const session = getSession();
+    const url = opts.track && session?.member_id
+      ? referralShareUrl(href, opts.track, session.member_id)
+      : absoluteUrl(href);
     const label = opts.label === false ? "" : escapeHtml(opts.label || t("share.title"));
-    // A row that shares a post is marked, so the share itself can be counted.
-    const track = opts.track ? ` data-share-track="${escapeHtml(opts.track)}"` : "";
-    return `<div class="share-row${opts.compact ? " share-row--compact" : ""}"${track}>
+    return `<div class="share-row${opts.compact ? " share-row--compact" : ""}">
       ${label ? `<span class="share-label">${label}</span>` : ""}
       <div class="share-btns">
-        ${shareTargets(href, text)
+        ${shareTargets(url, text)
           .map(
             (n) =>
               `<a class="share-btn share-${n.id}" href="${escapeHtml(n.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(n.label)}" aria-label="${escapeHtml(n.label)}">${shareIcon(n.id)}</a>`
@@ -849,12 +928,11 @@
     toast(ok ? t("share.copied") : t("share.copyFail"));
   });
 
-  /* ---------- Post analytics: impressions · link clicks · shares ----------
-     Every event is one row in public.post_events (see sql/post_analytics.sql).
-     Recommendations already live in post_votes, so only these three are stored
-     here. Counting never blocks the UI: failures stay silent, and a database
-     without the table simply records nothing. */
-  const ANALYTICS_KINDS = ["impression", "click", "share"];
+  /* ---------- Post analytics: impressions · link clicks · referrals ----------
+     Impressions and post clicks are client-side events. A share conversion is
+     written by the registration trigger only after a new member signs up via a
+     shared post link; clicking Share or Copy never increments it. */
+  const ANALYTICS_KINDS = ["impression", "click"];
   const impressionSeen = new Set();
   let impressionQueue = [];
   let impressionTimer = null;
@@ -935,18 +1013,9 @@
     cards.forEach((c) => impressionObserver.observe(c));
   }
 
-  // Shares and link clicks, counted wherever a post card is drawn.
+  // Link clicks on a post card are tracked here. Sharing itself is not a
+  // completion: referral progress is recorded after a visitor registers.
   document.addEventListener("click", (e) => {
-    const share = e.target.closest?.("[data-share-track] .share-btn");
-    if (share) {
-      const row = share.closest("[data-share-track]");
-      const network = share.classList.contains("share-copy")
-        ? "copy"
-        : [...share.classList].find((c) => c.startsWith("share-") && c !== "share-btn" && c !== "share-copy")?.slice(6) ||
-          "";
-      trackPostEvent(row.dataset.shareTrack, "share", { network });
-      return;
-    }
     const card = e.target.closest?.(".post-card[data-post]");
     if (!card) return;
     const link = e.target.closest("a[href]");
@@ -1021,7 +1090,7 @@
           <a class="hnote-row" href="${escapeHtml(href)}" data-note="${escapeHtml(n.id)}">
             <div class="hnote-dot ${n.read ? 'read' : ''}"></div>
             <div>
-              <strong>${escapeHtml(n.title || n.kind)}</strong>
+              <strong>${escapeHtml(tr(n.title || n.kind))}</strong>
               <div style="color:var(--muted);font-size:12px;margin-top:2px">${escapeHtml(n.body || "")} · ${String(n.created_at || "").slice(0, 16).replace("T", " ")}</div>
             </div>
           </a>`;
@@ -1528,12 +1597,12 @@
      A member earns points from five sources, each at its own rate:
 
        1 watch minute — yours or through your link —   = 1 point
-       5 link shares                                   = 1 point
+       5 new members registered through your shared links = 1 point
        10 public or exclusive playlists                = 1 point
        50 public or exclusive recommendations          = 1 point
        100 comments                                    = 1 point
 
-     Fractions are dropped (12 shares are worth 2 points, not 2.4). What a
+     Fractions are dropped (12 referred registrations are worth 2 points, not 2.4). What a
      member can spend is what they earned minus what they already spent
      (profiles.points_spent), so the bonus points of a source cannot be spent
      twice and the watch minutes themselves are never destroyed.
@@ -1565,7 +1634,7 @@
     const id = restValue(memberId);
     const minutes = Number(profile.private_minutes || 0) + Number(profile.public_minutes || 0);
     const [shares, playlists, recommendations, comments] = await Promise.all([
-      countRows(`/rest/v1/post_events?kind=eq.share&member_id=eq.${id}&select=id`),
+      countRows(`/rest/v1/post_events?kind=eq.share&network=eq.referral&member_id=eq.${id}&select=id`),
       countRows(`/rest/v1/playlists?owner_id=eq.${id}&visibility=in.(public,exclusive)&select=playlist_id`),
       countRows(
         `/rest/v1/posts?owner_id=eq.${id}&kind=in.(recommendation,reclist)&visibility=in.(public,exclusive)&select=post_id`
@@ -1659,6 +1728,8 @@
     isLoggedIn,
     getSession,
     setSession,
+    getReferralAttribution,
+    clearReferralAttribution,
     renderAuth,
     logout,
     downloadAccountTxt,

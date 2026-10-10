@@ -22,6 +22,7 @@
     prizes: [],
     counts: {},
     mine: new Set(),
+    winners: [],
     entryRows: [],
     schemaOk: true,
     entriesOk: true,
@@ -69,7 +70,7 @@
       for (const [k, v] of sp) if (k.toLowerCase() === name) return v;
       return "";
     };
-    return { group: get("groupprize"), prize: get("prize") };
+    return { group: get("groupprize"), prize: get("prize"), mode: get("mode").toLowerCase() };
   }
 
   // ---------- data ----------
@@ -101,10 +102,17 @@
       state.counts[r.prize_id] = (state.counts[r.prize_id] || 0) + 1;
     });
     state.mine = new Set();
+    state.winners = [];
     const id = sess()?.member_id;
-    if (id && state.entriesOk) {
-      const mine = await supabaseRequest(`/rest/v1/prize_entries?member_id=eq.${restValue(id)}&select=prize_id`);
+    if (id) {
+      const [mine, wins] = await Promise.all([
+        state.entriesOk
+          ? supabaseRequest(`/rest/v1/prize_entries?member_id=eq.${restValue(id)}&select=prize_id`)
+          : Promise.resolve({ ok: false, data: null }),
+        supabaseRequest(`/rest/v1/winners?member_id=eq.${restValue(id)}&select=*`),
+      ]);
       if (mine.ok && Array.isArray(mine.data)) state.mine = new Set(mine.data.map((r) => r.prize_id));
+      if (wins.ok && Array.isArray(wins.data)) state.winners = wins.data;
     }
   }
 
@@ -139,8 +147,8 @@
       username: String(member.username || "").toLowerCase(),
       memberId: String(member.member_id || "").toLowerCase(),
     };
-    // Points are earned from five sources — watch minutes, link shares,
-    // playlists, recommendations and comments — each at its own rate.
+    // Points are earned from five sources — watch minutes, successful link
+    // referrals, playlists, recommendations and comments — each at its own rate.
     const mp = await C.memberPoints(id, profile);
     state.ctx.points = mp.available;
     state.ctx.pointsEarned = mp.earned;
@@ -458,12 +466,28 @@
 
   function actionHtml(p) {
     const st = statusOf(p);
-    const joined = state.mine.has(p.id);
-    const can = st === "open" && eligible(p) && state.entriesOk;
+    const cost = Math.max(0, Number(p.minutes_required || 0));
+    const points = Number(state.ctx?.points || 0);
+    const winner = state.winners.find((w) => String(w.prize_title || "") === String(p.title || ""));
+    const claimed = Boolean(winner);
+    const claimRequested = Boolean(winner?.claim_requested_at);
+    const soldOut = p.quantity != null && Number(p.winners_count || 0) >= Number(p.quantity);
+    const can = st === "open" && !claimed && !soldOut && eligible(p) && points >= cost;
     let btn;
-    if (joined) btn = `<button class="btn btn-lg btn-primary pz-sub is-done" type="button" disabled>✓ ${t("prize.subscribed")}</button>`;
-    else if (can) btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-subscribe>${t("prize.subscribe")}</button>`;
-    else btn = `<button class="btn btn-lg btn-primary pz-sub is-locked" type="button" aria-disabled="true" data-locked>${t("prize.subscribe")}</button>`;
+    if (claimed) {
+      btn = `<button class="btn btn-lg btn-primary pz-sub is-done" type="button" disabled>✓ ${escapeHtml(claimRequested ? t("prize.claimRequested") : t("prize.status.winner"))}</button>`;
+    } else if (can) {
+      btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-claim-simple>${escapeHtml(t("prize.claim"))} · ${escapeHtml(t("prize.points", { n: cost }))}</button>`;
+    } else {
+      btn = `<button class="btn btn-lg btn-primary pz-sub is-locked" type="button" aria-disabled="true" data-locked>${escapeHtml(t("prize.claim"))}</button>`;
+    }
+    let reason = "";
+    if (claimed && claimRequested) reason = t("prize.claimRequestSent");
+    else if (!claimed && !can) {
+      if (soldOut) reason = t("prize.soldOut");
+      else if (st === "open" && eligible(p) && points < cost) reason = t("prize.needPoints", { need: cost, have: points });
+      else reason = lockReason(p);
+    }
     const end = endMs(p);
     let timerBlock = "";
     if (st === "upcoming") timerBlock = countdownHtml(startMs(p), t("prize.startsIn"));
@@ -475,7 +499,7 @@
     const progress = need
       ? `<div class="pz-progress"><div class="pz-progress-top"><span>${t("prize.subsProgress", { n, need })}</span><b>${pct}%</b></div><div class="pz-bar"><i style="width:${pct}%"></i></div></div>`
       : `<div class="pz-progress"><div class="pz-progress-top"><span>${t("prize.subscribers", { n })}</span></div></div>`;
-    return `<div class="pz-action">${btn}${timerBlock}${progress}</div>`;
+    return `<div class="pz-action">${btn}${reason ? `<p class="pz-lock-reason">${escapeHtml(reason)}</p>` : ""}${timerBlock}${progress}</div>`;
   }
 
   function detailHtml(p) {
@@ -505,12 +529,54 @@
       </article>`;
   }
 
+  function hasConfiguredModes(p) {
+    return Boolean(center.modesOk && center.modes.some((m) => String(m.prize_id) === String(p.id)));
+  }
+
+  function detailModesHtml(p) {
+    const g = state.groups.find((x) => String(x.id) === String(p.group_id));
+    const modes = modesOf(p);
+    const selected = modes.find((m) => modeKey(m) === center.tab) || modes[0];
+    const end = endMs(p);
+    const terms = lines(p.terms);
+    const tabs = modes.map((m) => {
+      const active = modeKey(m) === modeKey(selected);
+      return `<button type="button" role="tab" class="pz-tab ${active ? "on" : ""}" data-tab="${escapeHtml(modeKey(m))}" aria-selected="${active}">
+        ${MODE_ICON[modeKey(m)] || ""}<span>${escapeHtml(t(`prize.mode.${modeKey(m)}`))}</span>
+        <small>${escapeHtml(t("prize.points", { n: Number(m.points_cost || 0) }))}</small>
+      </button>`;
+    }).join("");
+    const termsHtml = terms.length
+      ? `<h2>${t("prize.terms")}</h2><ul class="pz-terms">${terms.map((line) => `<li><i aria-hidden="true">•</i><span>${escapeHtml(line)}</span></li>`).join("")}</ul>`
+      : "";
+    return `
+      ${g ? `<a class="pz-back" href="${groupHref(g)}">‹ ${escapeHtml(g.name)}</a>` : `<a class="pz-back" href="${PAGE}">‹ ${t("prize.back")}</a>`}
+      <article class="pz-detail glass">
+        <h1>${escapeHtml(p.title)}</h1>
+        ${carouselHtml(gallery(p), p.title)}
+        ${videoHtml(p.video_url)}
+        <div class="pz-dates">
+          <div><span>${t("prize.added")}</span><b>${p.created_at ? escapeHtml(formatDate(p.created_at)) : "—"}</b></div>
+          <div><span>${t("prize.ends")}</span><b>${end === null ? t("prize.noEnd") : escapeHtml(formatDate(p.ends_at))}</b></div>
+        </div>
+        <h2>${t("prize.description")}</h2>
+        <p class="pz-desc">${escapeHtml(p.description || "").replace(/\n/g, "<br>")}</p>
+        ${termsHtml}
+        ${state.ctx ? C.pointsHtml(state.ctx.pointsView) : `<p class="pz-pts-hint"><a href="./login.html">${escapeHtml(t("prize.signinNeeded"))}</a></p>`}
+        <section class="pz-detail-modes" id="pz-detail-modes">
+          <h2>${t("prize.modes")}</h2>
+          <div class="pz-tabs" role="tablist">${tabs}</div>
+          <div class="pz-tab-panel">${modePanelHtml(p, selected)}</div>
+        </section>
+      </article>`;
+  }
+
   // ---------- full page ----------
   async function renderPage() {
     const root = $("#prize-root");
     if (!root) return;
     clearInterval(timer);
-    const { group, prize } = urlParams();
+    const { group, prize, mode: requestedMode } = urlParams();
     let inner;
     let current = null;
     if (!state.schemaOk) inner = `<p class="empty">${t("prize.needSql")}</p>`;
@@ -519,7 +585,15 @@
       if (!p || !canSee(p)) inner = `<p class="empty">${t("prize.notFound")}</p><a class="btn btn-sm btn-ghost" href="${PAGE}">${t("prize.back")}</a>`;
       else {
         current = p;
-        inner = detailHtml(p);
+        if (hasConfiguredModes(p)) {
+          const prizeModes = modesOf(p);
+          if (prizeModes.some((m) => modeKey(m) === requestedMode)) center.tab = requestedMode;
+          else if (!prizeModes.some((m) => modeKey(m) === center.tab)) center.tab = modeKey(prizeModes[0]);
+          await loadActivity(p);
+          const selected = prizeModes.find((m) => modeKey(m) === center.tab) || prizeModes[0];
+          await loadPeople(entriesOf(p, selected).map((entry) => entry.member_id));
+          inner = detailModesHtml(p);
+        } else inner = detailHtml(p);
       }
     } else if (group) inner = groupHtml(group);
     else inner = overviewHtml();
@@ -530,33 +604,116 @@
     if (state.schemaOk && !prize && !group) mountCenter();
     if (!current) return;
     bindCarousel(root);
-    wireAction(root, current);
-    startCountdown(root, () => refreshDetail(current));
+    if (hasConfiguredModes(current)) wireDetailModes(root, current);
+    else {
+      wireAction(root, current);
+      startCountdown(root, () => refreshDetail(current));
+    }
+  }
+
+  function simpleLockReason(p) {
+    const st = statusOf(p);
+    if (st === "ended") return t("prize.closed");
+    if (st === "upcoming") return t("prize.notStarted");
+    if (p.quantity != null && Number(p.winners_count || 0) >= Number(p.quantity)) return t("prize.soldOut");
+    const cost = Math.max(0, Number(p.minutes_required || 0));
+    if (state.ctx?.active && eligible(p) && Number(state.ctx.points || 0) < cost) {
+      return t("prize.needPoints", { need: cost, have: Number(state.ctx.points || 0) });
+    }
+    return lockReason(p);
   }
 
   function wireAction(root, p) {
     const box = root.querySelector("#pz-action");
     if (!box) return;
     box.onclick = async (e) => {
-      if (e.target.closest("[data-locked]")) return toast(lockReason(p));
-      const btn = e.target.closest("[data-subscribe]");
+      if (e.target.closest("[data-locked]")) return toast(simpleLockReason(p));
+      const btn = e.target.closest("[data-claim-simple]");
       if (!btn) return;
-      if (statusOf(p) !== "open") return toast(t("prize.closed"));
+      const s = sess();
+      if (!s?.member_id || !state.ctx) return toast(t("prize.signinNeeded"));
+      if (statusOf(p) !== "open" || !eligible(p)) return toast(simpleLockReason(p));
+      const cost = Math.max(0, Number(p.minutes_required || 0));
+      if (Number(state.ctx.points || 0) < cost) return toast(simpleLockReason(p));
+      if (!confirm(t("prize.confirmClaim", { n: cost, title: p.title }))) return;
       btn.disabled = true;
-      btn.textContent = t("prize.subscribing");
-      const rr = await C.rpc("prize_subscribe_plain", { p_member: sess().member_id, p_prize: p.id });
-      if (rr.ok && rr.data?.ok && !rr.data.already) {
-        state.counts[p.id] = countOf(p) + 1;
-        state.mine.add(p.id);
-        toast(t("prize.subOk"));
-      } else if (rr.ok && rr.data?.ok) {
-        state.mine.add(p.id); // already subscribed from another tab/device
-        toast(t("prize.subscribed"));
+      btn.textContent = t("prize.claiming");
+      const result = await C.rpc("prize_claim_simple", { p_member: s.member_id, p_prize: p.id });
+      if (result.ok && result.data?.ok) {
+        state.ctx.pointsSpent = Number(state.ctx.pointsSpent || 0) + Number(result.data.cost ?? cost);
+        state.ctx.points = Math.max(0, Number(state.ctx.pointsEarned || 0) - state.ctx.pointsSpent);
+        if (state.ctx.pointsView) {
+          state.ctx.pointsView.spent = state.ctx.pointsSpent;
+          state.ctx.pointsView.available = state.ctx.points;
+        }
+        state.winners.push({ prize_title: p.title, member_id: s.member_id, minutes_paid: result.data.cost ?? cost, claim_requested_at: new Date().toISOString() });
+        toast(t("prize.claimRequestOk"));
+      } else if (result.data?.error === "already") {
+        await reloadSimpleWinners();
+        toast(t("prize.status.winner"));
+      } else if (result.data?.error === "points") {
+        toast(t("prize.needPoints", { need: result.data.need ?? cost, have: state.ctx.points }));
+      } else if (["incomplete", "audience", "inactive"].includes(result.data?.error)) {
+        toast(t("prize.notEligible"));
       } else {
         toast(t("prize.subFail"));
       }
-      refreshDetail(p);
+      await refreshDetail(p);
     };
+  }
+
+  async function reloadSimpleWinners() {
+    const id = sess()?.member_id;
+    if (!id) return;
+    const result = await supabaseRequest(`/rest/v1/winners?member_id=eq.${restValue(id)}&select=*`);
+    if (result.ok && Array.isArray(result.data)) state.winners = result.data;
+  }
+
+  function setModeInUrl(mode) {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("mode", mode);
+      history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    } catch {}
+  }
+
+  function wireDetailModes(root, p) {
+    const box = root.querySelector("#pz-detail-modes");
+    if (!box) return;
+    box.onclick = async (e) => {
+      const tab = e.target.closest("[data-tab]");
+      if (tab) {
+        center.tab = tab.dataset.tab;
+        setModeInUrl(center.tab);
+        return renderPage();
+      }
+      const expanded = e.target.closest("[data-expand]");
+      if (expanded) {
+        center.expanded = center.expanded === expanded.dataset.expand ? "" : expanded.dataset.expand;
+        return renderPage();
+      }
+      const lock = e.target.closest("[data-locked-mode]");
+      if (lock) {
+        const mode = modesOf(p).find((row) => modeKey(row) === lock.dataset.lockedMode);
+        return toast((mode ? modeStatus(p, mode).reason : "") || t("prize.closed"));
+      }
+      const sub = e.target.closest("[data-sub-mode]");
+      if (sub) return subscribeMode(p, modesOf(p).find((row) => modeKey(row) === sub.dataset.subMode));
+      const claim = e.target.closest("[data-claim-challenge]");
+      if (claim) return claimChallenge(p, modesOf(p).find((row) => String(row.id) === String(claim.dataset.claimChallenge)));
+      const request = e.target.closest("[data-request-claim]");
+      if (request) return requestPrizeClaim(p, modesOf(p).find((row) => String(row.id) === String(request.dataset.requestClaim)));
+      const coupon = e.target.closest("[data-coupon-apply]");
+      if (coupon) return applyCoupon(p, modesOf(p).find((row) => modeKey(row) === coupon.dataset.couponApply), coupon.parentElement.querySelector("[data-coupon-input]")?.value);
+      const withdrawButton = e.target.closest("[data-withdraw]");
+      if (withdrawButton) return withdraw(p, modesOf(p).find((row) => modeKey(row) === withdrawButton.dataset.withdraw));
+    };
+  }
+
+  async function refreshPrizeViews(p) {
+    const params = urlParams();
+    if ($("#prize-root") && String(params.prize) === String(p.id)) await renderPage();
+    if (center.open && String(center.open.id) === String(p.id) && $("#pz-modal")) await renderModal();
   }
 
   async function refreshDetail(p) {
@@ -612,6 +769,7 @@
     limits: null, // participation limits per tier
     act: {}, // mode_id -> what the signed-in member did since joining
     coupon: {}, // mode_id -> applied discount { id, code, percent }
+    activityLoaded: new Set(), // entries whose live activity counts were loaded
     open: null, // prize row with the dialog open
     tab: "", // active mode key in the dialog
     expanded: "", // competitor row expanded in the dialog
@@ -1037,20 +1195,57 @@
       ${winners.length ? `<ul class="pz-people">${winners.map((e) => personRowHtml(e)).join("")}</ul>` : `<p class="empty">${t("prize.noWinners")}</p>`}`;
   }
 
+  function challengeClaimState(p, m, entry) {
+    const progress = progressOf(p, m, entry);
+    const days = Number(R.cfgOf(m).days || 0);
+    const joinedAt = Date.parse(entry?.created_at || "") || 0;
+    const expired = Boolean(days && joinedAt && Date.now() > joinedAt + days * 86400000);
+    const cap = num(m.quantity);
+    const won = entriesOf(p, m).filter((e) => String(e.status || "").toLowerCase() === "winner").length;
+    const full = cap !== null && won >= cap;
+    const ended = String(p.status || "").toLowerCase() === "ended";
+    const ready = Boolean(progress.rows.length && !progress.rest.length && !expired && !full && !ended);
+    const reason = ended ? t("prize.closed") : expired ? t("pzm.timeUp") : full ? t("prize.soldOut") : "";
+    return { ...progress, ready, expired, full, reason };
+  }
+
   function actionHtml2(p, m) {
     const mine = myEntry(p, m);
     const st = modeStatus(p, m);
     const cost = costOf(m);
+    const key = modeKey(m);
+    const challenge = mine && key === "challenge" ? challengeClaimState(p, m, mine) : null;
     let btn;
+    let note = "";
     if (mine) {
-      const won = String(mine.status || "").toLowerCase() === "winner";
-      btn = `<button class="btn btn-lg btn-primary pz-sub ${won ? "is-done" : ""}" type="button" disabled>${won ? `✓ ${escapeHtml(t("prize.status.winner"))}` : `✓ ${escapeHtml(t("prize.subscribed"))}`}</button>`;
+      const status = String(mine.status || "competitor").toLowerCase();
+      if (status === "winner") {
+        const message = key === "challenge" ? t("pzm.challengeWon") : key === "lottery" ? t("prize.drawWon") : t("prize.giftWon");
+        if (mine.claim_requested_at) {
+          btn = `<button class="btn btn-lg btn-primary pz-sub is-done" type="button" disabled>✓ ${escapeHtml(t("prize.claimRequested"))}</button>`;
+          note = `<p class="pz-lock-reason pz-success-note">${escapeHtml(t("prize.claimRequestSent"))}</p>`;
+        } else {
+          btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-request-claim="${escapeHtml(String(mine.id))}">${escapeHtml(t("prize.claim"))}</button>`;
+          note = `<p class="pz-lock-reason pz-success-note">${escapeHtml(message)}</p>`;
+        }
+      } else if (status === "competitor" && challenge?.ready) {
+        btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-claim-challenge="${escapeHtml(String(mine.id))}">${escapeHtml(t("pzm.confirmWin"))}</button>`;
+        note = `<p class="pz-lock-reason pz-success-note">${escapeHtml(t("pzm.challengeReady"))}</p>`;
+      } else if (status === "competitor") {
+        btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-withdraw="${escapeHtml(key)}">${escapeHtml(t("pzm.withdraw"))}</button>`;
+        if (challenge?.reason) note = `<p class="pz-lock-reason">${escapeHtml(challenge.reason)}</p>`;
+      } else {
+        const label = t(`prize.status.${status}`);
+        btn = `<button class="btn btn-lg btn-primary pz-sub ${status === "excluded" ? "is-locked" : "is-done"}" type="button" disabled>✓ ${escapeHtml(label)}</button>`;
+      }
     } else if (st.can) {
-      btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-sub-mode="${escapeHtml(modeKey(m))}">${escapeHtml(t("prize.subscribe"))} · ${escapeHtml(t("prize.points", { n: cost }))}</button>`;
+      const label = key === "gift" ? t("prize.claim") : key === "lottery" ? t("prize.enterLottery") : t("prize.subscribe");
+      btn = `<button class="btn btn-lg btn-primary pz-sub" type="button" data-sub-mode="${escapeHtml(key)}">${escapeHtml(label)} · ${escapeHtml(t("prize.points", { n: cost }))}</button>`;
     } else {
-      btn = `<button class="btn btn-lg btn-primary pz-sub is-locked" type="button" data-locked-mode="${escapeHtml(modeKey(m))}" aria-disabled="true">${escapeHtml(t("prize.subscribe"))}</button>`;
+      const label = key === "gift" ? t("prize.claim") : key === "lottery" ? t("prize.enterLottery") : t("prize.subscribe");
+      btn = `<button class="btn btn-lg btn-primary pz-sub is-locked" type="button" data-locked-mode="${escapeHtml(key)}" aria-disabled="true">${escapeHtml(label)}</button>`;
     }
-    return `<div class="pz-action">${btn}${!mine && !st.can && st.reason ? `<p class="pz-lock-reason">${escapeHtml(st.reason)}</p>` : ""}</div>`;
+    return `<div class="pz-action">${btn}${note}${!mine && !st.can && st.reason ? `<p class="pz-lock-reason">${escapeHtml(st.reason)}</p>` : ""}</div>`;
   }
 
   function couponHtml(p, m) {
@@ -1059,12 +1254,6 @@
     if (c) return `<p class="pz-lock-reason">${escapeHtml(t("pzm.couponApplied", { code: c.code, n: c.percent }))}</p>`;
     return `<div class="pz-coupon"><input data-coupon-input placeholder="${escapeHtml(t("pzm.couponPh"))}" autocomplete="off" />
       <button type="button" class="btn btn-sm btn-ghost" data-coupon-apply="${escapeHtml(modeKey(m))}">${escapeHtml(t("pzm.couponApply"))}</button></div>`;
-  }
-
-  function withdrawHtml(p, m) {
-    const mine = myEntry(p, m);
-    if (!mine || modeKey(m) === "gift" || String(mine.status || "").toLowerCase() !== "competitor") return "";
-    return `<button type="button" class="btn btn-sm btn-ghost" data-withdraw="${escapeHtml(modeKey(m))}">${escapeHtml(t("pzm.withdraw"))}</button>`;
   }
 
   function deadlineHtml(p, m) {
@@ -1095,7 +1284,6 @@
       ${deadlineHtml(p, m)}
       ${couponHtml(p, m)}
       ${actionHtml2(p, m)}
-      ${withdrawHtml(p, m)}
       ${peopleHtml(p, m)}`;
   }
 
@@ -1160,7 +1348,6 @@
     center.open = p;
     logVisit(p);
     await loadActivity(p);
-    await maybeAward(p);
     center.tab = modeKey(modesOf(p)[0]);
     center.expanded = "";
     // Never stack two dialogs: reuse the overlay that is already open.
@@ -1197,6 +1384,10 @@
         }
         const sub = e.target.closest("[data-sub-mode]");
         if (sub) return subscribeMode(cur, modesOf(cur).find((x) => modeKey(x) === sub.dataset.subMode));
+        const claim = e.target.closest("[data-claim-challenge]");
+        if (claim) return claimChallenge(cur, modesOf(cur).find((x) => String(x.id) === String(claim.dataset.claimChallenge)));
+        const request = e.target.closest("[data-request-claim]");
+        if (request) return requestPrizeClaim(cur, modesOf(cur).find((x) => String(x.id) === String(request.dataset.requestClaim)));
         const cp = e.target.closest("[data-coupon-apply]");
         if (cp) return applyCoupon(cur, modesOf(cur).find((x) => modeKey(x) === cp.dataset.couponApply), cp.parentElement.querySelector("[data-coupon-input]")?.value);
         const wd = e.target.closest("[data-withdraw]");
@@ -1217,37 +1408,82 @@
   }
 
   // What the member did since joining, per mode: feeds the "required actions" bars.
-  async function loadActivity(p) {
+  async function loadActivity(p, force = false) {
     const me = sess()?.member_id;
     if (!me || !center.mEntriesOk) return;
     for (const m of modesOf(p)) {
       const e = myEntry(p, m);
       if (!e || !m.id || String(e.id).startsWith("legacy")) continue;
+      const key = String(e.id);
+      if (!force && center.activityLoaded.has(key)) continue;
       const a = (await R.activityCounts([me], e.created_at))[me];
       if (a) center.act[m.id] = a;
+      center.activityLoaded.add(key);
     }
   }
 
-  // Challenge: whoever finishes every action in time (and while places are left) wins.
-  // The browser only asks; the server re-counts everything before it awards the prize.
-  async function maybeAward(p) {
+  // The browser only offers the claim once progress looks complete; the server
+  // re-counts every condition and awards the prize in one locked transaction.
+  async function claimChallenge(p, m) {
     const s = sess();
-    if (!s?.member_id) return false;
-    let won = false;
-    for (const m of modesOf(p)) {
-      if (modeKey(m) !== "challenge") continue;
-      const e = myEntry(p, m);
-      if (!e || String(e.status || "").toLowerCase() !== "competitor" || !e.id) continue;
-      const pr = progressOf(p, m, e);
-      if (!pr.rows.length || pr.rest.length) continue;
-      const res = await C.rpc("prize_claim_challenge", { p_member: s.member_id, p_entry: e.id });
-      if (res.ok && res.data?.ok) won = true;
+    if (!s?.member_id || !m || modeKey(m) !== "challenge") return toast(t("prize.signinNeeded"));
+    const entry = myEntry(p, m);
+    if (!entry || !entry.id || String(entry.status || "").toLowerCase() !== "competitor") return;
+    const ready = challengeClaimState(p, m, entry);
+    if (!ready.ready) return toast(ready.reason || t("pzm.challengeIncomplete"));
+    const button = [...document.querySelectorAll("[data-claim-challenge]")].find((el) => el.dataset.claimChallenge === String(entry.id));
+    if (button) {
+      button.disabled = true;
+      button.textContent = t("prize.claiming");
     }
-    if (won) {
+    const result = await C.rpc("prize_claim_challenge", { p_member: s.member_id, p_entry: entry.id });
+    const data = result.ok ? result.data : null;
+    if (!data) {
+      toast(t("prize.needSecure"));
+      await refreshPrizeViews(p);
+      return;
+    }
+    if (!data.ok) {
+      const message = data.error === "closed" ? t("prize.closed")
+        : data.error === "sold_out" ? t("prize.soldOut")
+          : data.error === "time_up" ? t("pzm.timeUp")
+            : data.error === "incomplete" || data.error === "no_conditions" ? t("pzm.challengeIncomplete")
+              : t("prize.subFail");
+      toast(message);
       await reloadEntries();
-      toast(t("pzm.challengeWon"));
+      await refreshPrizeViews(p);
+      return;
     }
-    return won;
+    await reloadEntries();
+    toast(t("pzm.challengeWon"));
+    refreshLists();
+    await refreshPrizeViews(p);
+  }
+
+  async function requestPrizeClaim(p, m) {
+    const s = sess();
+    const entry = m ? myEntry(p, m) : null;
+    if (!s?.member_id) return toast(t("prize.signinNeeded"));
+    if (!entry || String(entry.status || "").toLowerCase() !== "winner") return toast(t("prize.notWinner"));
+    if (entry.claim_requested_at) return toast(t("prize.claimRequestAlready"));
+    const button = [...document.querySelectorAll("[data-request-claim]")]
+      .find((el) => el.dataset.requestClaim === String(entry.id));
+    if (button) {
+      button.disabled = true;
+      button.textContent = t("prize.claiming");
+    }
+    const result = await C.rpc("prize_request_claim", { p_member: s.member_id, p_entry: entry.id });
+    const data = result.ok ? result.data : null;
+    if (!data?.ok) {
+      toast(data?.error === "not_winner" ? t("prize.notWinner") : t("prize.claimRequestFail"));
+      await reloadEntries();
+      await refreshPrizeViews(p);
+      return;
+    }
+    await reloadEntries();
+    toast(data.already ? t("prize.claimRequestAlready") : t("prize.claimRequestOk"));
+    refreshLists();
+    await refreshPrizeViews(p);
   }
 
   // The server counts wrong codes and blocks code entry for 24 hours after three in a row.
@@ -1265,7 +1501,7 @@
     }
     center.coupon[m.id] = { id: d.id, code: d.code, percent: Number(d.percent) };
     toast(t("pzm.couponApplied", { code: d.code, n: d.percent }));
-    await renderModal();
+    await refreshPrizeViews(p);
   }
 
   async function withdraw(p, m) {
@@ -1278,7 +1514,7 @@
     await reloadEntries();
     toast(t("pzm.withdrawn"));
     refreshLists();
-    await renderModal();
+    await refreshPrizeViews(p);
   }
 
   // ---------- subscribing ----------
@@ -1316,7 +1552,8 @@
       case "not_started": return t("prize.notStarted");
       case "sold_out": return t("prize.soldOut");
       case "audience": return t("pzm.aud.fail");
-      case "inactive": return t("prize.notEligible");
+      case "inactive":
+      case "incomplete": return t("prize.notEligible");
       case "points": return t("prize.needPoints", { need: d.need ?? costOf(m), have: state.ctx?.points ?? 0 });
       case "coupon": return t("pzm.couponInvalid");
       case "quota":
@@ -1336,15 +1573,18 @@
     if (!st.can) return toast(st.reason);
     const cost = costOf(m);
     const coupon = center.coupon[m.id] || null;
-    if (!confirm(t("prize.confirmSub", { n: cost }))) return;
     const k = modeKey(m);
+    const confirmed = k === "gift"
+      ? confirm(t("prize.confirmClaim", { n: cost, title: p.title }))
+      : confirm(t("prize.confirmSub", { n: cost }));
+    if (!confirmed) return;
     const res = await C.rpc("prize_join", { p_member: s.member_id, p_prize: p.id, p_mode: k, p_code: coupon?.code || null });
     const d = res.ok ? res.data : null;
     if (!d) return toast(t("prize.needSecure"));
     if (!d.ok) {
       if (d.error === "already") await reloadEntries();
       else toast(joinError(d, m));
-      await renderModal();
+      await refreshPrizeViews(p);
       return;
     }
     applySpent(d.cost);
@@ -1359,7 +1599,7 @@
     if (k === "lottery" && d.drawn) toast(t("prize.drawWon"));
     else toast(k === "gift" ? t("prize.giftWon") : t("prize.subOk"));
     refreshLists();
-    await renderModal();
+    await refreshPrizeViews(p);
   }
 
   // ---------- wiring ----------

@@ -146,7 +146,7 @@
       return ts >= sinceOf(r[idKey]) ? o : null;
     };
     const [shares, lists, posts, comm, follows, views, seen] = await Promise.all([
-      rows(`/rest/v1/post_events?kind=eq.share&member_id=${inList}${from("created_at")}&select=member_id,created_at`),
+      rows(`/rest/v1/post_events?kind=eq.share&network=eq.referral&member_id=${inList}${from("created_at")}&select=member_id,created_at`),
       rows(`/rest/v1/playlists?owner_id=${inList}&visibility=in.(public,exclusive)${from("created_at")}&select=owner_id,created_at`),
       rows(`/rest/v1/posts?owner_id=${inList}&kind=in.(recommendation,reclist)&visibility=in.(public,exclusive)${from("created_at")}&select=owner_id,created_at`),
       rows(`/rest/v1/comments?member_id=${inList}${from("created_at")}&select=member_id,created_at`),

@@ -11,6 +11,8 @@
     imgUrl,
     escapeHtml,
     restValue,
+    getReferralAttribution,
+    clearReferralAttribution,
     t,
   } = window.CineAura;
 
@@ -151,18 +153,23 @@
   }
 
   async function registerViaRpc(payload) {
+    const args = {
+      p_full_name: payload.full_name,
+      p_username: payload.username,
+      p_email: payload.email,
+      p_password: payload.password,
+      p_country: payload.country,
+      p_birth_date: payload.birth_date,
+      p_recovery_code: payload.recovery_code,
+      p_gender: payload.gender,
+    };
+    if (payload.referred_by_member_id && payload.referred_post_id) {
+      args.p_referred_by_member_id = payload.referred_by_member_id;
+      args.p_referred_post_id = payload.referred_post_id;
+    }
     const res = await supabaseRequest("/rest/v1/rpc/register_member", {
       method: "POST",
-      body: JSON.stringify({
-        p_full_name: payload.full_name,
-        p_username: payload.username,
-        p_email: payload.email,
-        p_password: payload.password,
-        p_country: payload.country,
-        p_birth_date: payload.birth_date,
-        p_recovery_code: payload.recovery_code,
-        p_gender: payload.gender,
-      }),
+      body: JSON.stringify(args),
     });
     if (res.ok && res.data && typeof res.data === "object") return res.data;
     if (res.status === 404) return null;
@@ -178,6 +185,9 @@
     const blocked = reasonFromRows(found.rows);
     if (blocked) return { ok: false, reason: blocked };
 
+    const referralColumns = payload.referred_by_member_id && payload.referred_post_id
+      ? { referred_by_member_id: payload.referred_by_member_id, referred_post_id: payload.referred_post_id }
+      : {};
     let memberId = generateMemberId();
     for (let i = 0; i < 6; i += 1) {
       const insert = await supabaseRequest(`/rest/v1/${found.table}`, {
@@ -197,6 +207,7 @@
           membership_duration: payload.membership_duration || "1 month",
           membership_expires_at: payload.membership_expires_at,
           watch_minutes: 0,
+          ...referralColumns,
         }),
       });
       if (insert.ok) {
@@ -217,7 +228,11 @@
       }
       if (insert.data?.code === "PGRST205") return { ok: false, reason: "setup" };
       const msg = JSON.stringify(insert.data || {});
-      if (/gender/i.test(msg) || /recovery_code/i.test(msg) || /membership/i.test(msg) || /watch_minutes/i.test(msg)) {
+      if (
+        /gender/i.test(msg) || /recovery_code/i.test(msg) || /membership/i.test(msg) ||
+        /watch_minutes/i.test(msg) || /referred_by_member_id|referred_post_id/i.test(msg)
+      ) {
+        const canStoreReferral = !/referred_by_member_id|referred_post_id/i.test(msg);
         const retry = await supabaseRequest(`/rest/v1/${found.table}`, {
           method: "POST",
           body: JSON.stringify({
@@ -229,6 +244,7 @@
             password: payload.password,
             country: payload.country,
             birth_date: payload.birth_date,
+            ...(canStoreReferral ? referralColumns : {}),
           }),
         });
         if (retry.ok) {
@@ -281,6 +297,7 @@
         membership_expires_at: expires.toISOString(),
         watch_minutes: 0,
       };
+      const referral = getReferralAttribution() || {};
       const result = await createAccount({
         full_name: fullName,
         username,
@@ -291,9 +308,11 @@
         recovery_code: recoveryCode,
         gender,
         ...membership,
+        ...referral,
       });
 
       if (result.ok) {
+        clearReferralAttribution();
         showSuccess({
           member_id: result.member_id,
           full_name: fullName,

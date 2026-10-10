@@ -21,12 +21,13 @@
   const PANEL_KEY = "cineaura_panel";
   const ALL_SECTIONS = ["accounts", "links", "iptv", "reports", "prizes", "messages", "staff", "settings"];
   const FEATURES = ["links", "messages", "comments", "posts", "reports"];
+  const requestedSection = new URLSearchParams(location.search).get("section");
 
   const state = {
     staff: null,
     settings: { show_admin: true, show_moderator: true, show_member: false },
     staffRows: [],
-    section: "accounts",
+    section: ALL_SECTIONS.includes(requestedSection) ? requestedSection : "accounts",
     members: [],
     profiles: {},
     sanctions: {},

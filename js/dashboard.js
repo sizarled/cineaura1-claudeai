@@ -1396,11 +1396,51 @@
   }
 
   async function viewPrizes(main) {
-    const prizes = await supabaseRequest("/rest/v1/prizes?select=*&order=minutes_required.asc");
-    const wins = await supabaseRequest(
-      `/rest/v1/winners?member_id=eq.${restValue(state.member.member_id)}&select=*`
-    );
-    const rawList = prizes.ok && Array.isArray(prizes.data) ? prizes.data : [];
+    const memberId = state.member.member_id;
+    const memberFilter = restValue(memberId);
+    const R = window.PrizeRules;
+    const [
+      prizeRes,
+      modeRes,
+      conditionRes,
+      entryRes,
+      progressRes,
+      groupRes,
+      winnerRes,
+      dateRes,
+      historyRes,
+      limitRes,
+    ] = await Promise.all([
+      supabaseRequest("/rest/v1/prizes?select=*&order=minutes_required.asc,id.asc"),
+      supabaseRequest("/rest/v1/prize_modes?select=*&order=sort_order.asc,id.asc"),
+      supabaseRequest("/rest/v1/prize_mode_conditions?select=*&order=sort_order.asc,id.asc"),
+      supabaseRequest("/rest/v1/prize_mode_entries?select=*&order=id.asc"),
+      supabaseRequest("/rest/v1/prize_mode_progress?select=*&order=id.asc"),
+      supabaseRequest("/rest/v1/prize_groups?select=id,name,thumb,visible,sort_order&order=sort_order.asc,id.asc"),
+      supabaseRequest(`/rest/v1/winners?member_id=eq.${memberFilter}&select=*`),
+      supabaseRequest("/rest/v1/prize_country_dates?select=*&order=id.asc"),
+      supabaseRequest(`/rest/v1/hestory?visitor_id=eq.${memberFilter}&select=tmdb_id,media_type,visited_at`),
+      R?.loadLimits ? R.loadLimits() : Promise.resolve({ limits: null, ok: false }),
+    ]);
+
+    const prizes = prizeRes.ok && Array.isArray(prizeRes.data) ? prizeRes.data : [];
+    const modes = modeRes.ok && Array.isArray(modeRes.data) ? modeRes.data : [];
+    const conditions = conditionRes.ok && Array.isArray(conditionRes.data) ? conditionRes.data : [];
+    const entries = entryRes.ok && Array.isArray(entryRes.data) ? entryRes.data : [];
+    const progress = progressRes.ok && Array.isArray(progressRes.data) ? progressRes.data : [];
+    const groups = groupRes.ok && Array.isArray(groupRes.data) ? groupRes.data : [];
+    const winners = winnerRes.ok && Array.isArray(winnerRes.data) ? winnerRes.data : [];
+    const countryDates = dateRes.ok && Array.isArray(dateRes.data) ? dateRes.data : [];
+    const history = historyRes.ok && Array.isArray(historyRes.data) ? historyRes.data : [];
+    const seen = new Set(history.map((row) => `${row.media_type}:${row.tmdb_id}`));
+    const mp = await C.memberPoints(memberId, state.profile || {});
+    const totalPoints = Number(mp.available || 0);
+    const totalMinutes = Number(state.profile?.private_minutes || 0) + Number(state.profile?.public_minutes || 0);
+    const active = normalizeAccountStatus(state.member.status) === "active";
+    const now = Date.now();
+    const country = String(state.profile?.country || state.member.country || "").trim().toLowerCase();
+    const username = String(state.member.username || "").trim().toLowerCase();
+    const memberKey = String(memberId || "").trim().toLowerCase();
     const ageYears = (iso) => {
       if (!iso) return null;
       const birth = new Date(iso);
@@ -1410,93 +1450,286 @@
       if (md < 0 || (md === 0 && new Date().getDate() < birth.getDate())) age -= 1;
       return age;
     };
-    const hist = await supabaseRequest(
-      `/rest/v1/hestory?visitor_id=eq.${restValue(state.member.member_id)}&select=tmdb_id,media_type`
-    );
-    const seen = new Set((hist.data || []).map((h) => `${h.media_type}:${h.tmdb_id}`));
     const age = ageYears(state.member.birth_date);
-    const country = String(state.profile?.country || state.member.country || "").toLowerCase();
-    const uname = String(state.member.username || "").toLowerCase();
-    const now = Date.now();
-    const list = rawList.filter((p) => {
-      const vis = String(p.visibility || "public").toLowerCase();
-      if (p.starts_at && Date.parse(p.starts_at) > now) return false;
-      if (!p.unlimited_time && p.ends_at && Date.parse(p.ends_at) + 86400000 < now) return false;
-      if (p.quantity != null && Number(p.winners_count || 0) >= Number(p.quantity)) return false;
-      if (vis === "private") {
-        const names = String(p.allowed_usernames || "").toLowerCase().split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
-        return names.includes(uname) || names.includes(String(state.member.member_id).toLowerCase());
-      }
-      if (vis === "exclusive") {
-        const countries = String(p.countries || "").toLowerCase().split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
-        if (countries.length && !countries.includes(country)) return false;
-        if (p.min_age && age != null && age < Number(p.min_age)) return false;
-        if (p.max_age && age != null && age > Number(p.max_age)) return false;
-        if (p.watched_tmdb && p.watched_type) {
-          if (!seen.has(`${p.watched_type}:${p.watched_tmdb}`)) return false;
-        }
+    const groupFor = (p) => groups.find((g) => String(g.id) === String(p.group_id)) || null;
+    const groupName = (p) => p.group_name || groupFor(p)?.name || "";
+    const list = (value) => String(value || "").toLowerCase().split(/[,;\n\r]+/).map((x) => x.trim()).filter(Boolean);
+    const modeKey = (mode) => String(mode?.mode || "gift").toLowerCase();
+    const modesOf = (p) => modes.filter((mode) => String(mode.prize_id) === String(p.id));
+    const entriesOf = (p, mode) => entries.filter((entry) =>
+      String(entry.prize_id) === String(p.id) && String(entry.mode || "").toLowerCase() === modeKey(mode)
+    );
+    const mineFor = (p, mode) => entriesOf(p, mode).find((entry) =>
+      String(entry.member_id || "").toLowerCase() === memberKey
+    ) || null;
+    const prizeVisible = (p) => {
+      const group = groupFor(p);
+      if (group && group.visible === false) return false;
+      if (String(p.visibility || "public").toLowerCase() === "private") {
+        const allowed = list(p.allowed_usernames);
+        return allowed.includes(username) || allowed.includes(memberKey);
       }
       return true;
+    };
+    const baseConditionsMet = (p) => {
+      if (!prizeVisible(p) || !active) return false;
+      if (Number(p.minutes_required || 0) > totalMinutes) return false;
+      const visibility = String(p.visibility || "public").toLowerCase();
+      if (visibility === "exclusive") {
+        const countries = list(p.countries);
+        if (countries.length && !countries.includes(country)) return false;
+        const minAge = p.min_age == null || p.min_age === "" ? null : Number(p.min_age);
+        const maxAge = p.max_age == null || p.max_age === "" ? null : Number(p.max_age);
+        if (minAge !== null && (age === null || age < minAge)) return false;
+        if (maxAge !== null && (age === null || age > maxAge)) return false;
+        if (p.watched_tmdb && p.watched_type && !seen.has(`${p.watched_type}:${p.watched_tmdb}`)) return false;
+      }
+      return true;
+    };
+    const dayStart = (value) => {
+      if (!value) return null;
+      const stamp = Date.parse(`${String(value).slice(0, 10)}T00:00:00`);
+      return Number.isNaN(stamp) ? null : stamp;
+    };
+    const windowFor = (p, mode) => {
+      const rows = countryDates.filter((row) => String(row.prize_id) === String(p.id));
+      if (R?.windowFor) return R.windowFor(p, mode, rows, country);
+      const row = rows.find((x) => String(x.country || "").toLowerCase() === country);
+      return {
+        startsAt: row?.starts_at || mode?.starts_at || p.starts_at || null,
+        endsAt: row ? row.ends_at || null : (mode?.unlimited_time ? null : mode?.ends_at || p.ends_at || null),
+      };
+    };
+    const modeTiming = (p, mode) => {
+      if (String(p.status || "active").toLowerCase() === "ended") return { open: false, phase: "ended", reason: t("prize.closed") };
+      const window = windowFor(p, mode);
+      const start = dayStart(window.startsAt);
+      if (start !== null && start > now) return { open: false, phase: "upcoming", reason: t("prize.notStarted") };
+      if (modeKey(mode) !== "lottery") {
+        const end = dayStart(window.endsAt);
+        if (end !== null && end + 86400000 <= now) return { open: false, phase: "ended", reason: t("prize.closed") };
+      }
+      return { open: true, phase: "open", reason: "" };
+    };
+    const configOf = (mode) => {
+      if (R?.cfgOf) return R.cfgOf(mode);
+      try { return typeof mode?.config === "object" ? mode.config : JSON.parse(mode?.config || "{}"); }
+      catch { return {}; }
+    };
+    const memberEntries = entries.filter((entry) => String(entry.member_id || "").toLowerCase() === memberKey);
+    const prizeMap = Object.fromEntries(prizes.map((p) => [p.id, p]));
+    const usage = R?.usage ? R.usage(memberEntries, prizeMap) : null;
+    const limits = limitRes?.limits || R?.DEFAULT_LIMITS || null;
+    const modeState = (p, mode) => {
+      const key = modeKey(mode);
+      const mine = mineFor(p, mode);
+      const timing = modeTiming(p, mode);
+      const own = entriesOf(p, mode);
+      const won = own.filter((entry) => String(entry.status || "").toLowerCase() === "winner").length;
+      const capValue = key === "lottery" ? mode.winners_needed : mode.quantity;
+      const cap = capValue == null || capValue === "" ? null : Number(capValue);
+      const full = cap !== null && won >= cap;
+      const cost = Math.max(0, Number(mode.points_cost || 0));
+      const audience = configOf(mode).audience || {};
+      const audienceOk = !R?.audienceFails || R.audienceFails(audience, state.member).length === 0;
+      const baseOk = baseConditionsMet(p);
+      const quota = limits && usage && R?.limitCheck
+        ? R.limitCheck(limits, state.member.membership_type, key, usage)
+        : { ok: true };
+      const canJoin = timing.open && !mine && !full && baseOk && audienceOk && quota.ok && totalPoints >= cost;
+      return { mine, timing, full, won, cap, cost, baseOk, audienceOk, quota, canJoin };
+    };
+    const plainWinner = (p) => winners.some((winner) =>
+      String(winner.prize_title || "") === String(p.title || "")
+    );
+    const canClaimPlain = (p) => {
+      if (!baseConditionsMet(p) || plainWinner(p)) return false;
+      if (String(p.status || "active").toLowerCase() === "ended") return false;
+      const start = dayStart(p.starts_at);
+      const end = p.unlimited_time ? null : dayStart(p.ends_at);
+      if (start !== null && start > now) return false;
+      if (end !== null && end + 86400000 <= now) return false;
+      if (p.quantity != null && Number(p.winners_count || 0) >= Number(p.quantity)) return false;
+      return totalPoints >= Math.max(0, Number(p.minutes_required || 0));
+    };
+    const activeChallenges = entries.filter((entry) =>
+      String(entry.member_id || "").toLowerCase() === memberKey &&
+      String(entry.mode || "").toLowerCase() === "challenge" &&
+      String(entry.status || "competitor").toLowerCase() === "competitor"
+    );
+    const activityByEntry = {};
+    if (R?.activityCounts && activeChallenges.length) {
+      await Promise.all(activeChallenges.map(async (entry) => {
+        const result = await R.activityCounts([memberId], entry.created_at || "");
+        activityByEntry[String(entry.id)] = result?.[memberId] || {};
+      }));
+    }
+    const challengeProgress = (p, mode, entry) => {
+      const rows = conditions.filter((condition) => String(condition.mode_id) === String(mode.id));
+      const activity = activityByEntry[String(entry.id)] || {};
+      const completed = rows.filter((condition) => {
+        const required = Math.max(1, Number(condition.required || 1));
+        const stored = progress.find((row) =>
+          String(row.entry_id) === String(entry.id) && String(row.condition_id) === String(condition.id)
+        );
+        let live = 0;
+        const kind = String(condition.kind || "watch");
+        if (kind === "watch") live = seen.has(`${condition.media_type || "movie"}:${condition.tmdb_id}`) ? 1 : 0;
+        else if (kind === "points") live = totalMinutes;
+        else if (typeof activity[kind] === "number") live = activity[kind];
+        return Math.max(Number(stored?.progress || 0), Number(live || 0)) >= required;
+      }).length;
+      const days = Number(configOf(mode).days || 0);
+      const joinedAt = Date.parse(entry.created_at || "") || 0;
+      const expired = Boolean(days && joinedAt && now > joinedAt + days * 86400000);
+      const winnersCount = entriesOf(p, mode).filter((row) => String(row.status || "").toLowerCase() === "winner").length;
+      const cap = mode.quantity == null || mode.quantity === "" ? null : Number(mode.quantity);
+      const full = cap !== null && winnersCount >= cap;
+      const ready = rows.length > 0 && completed === rows.length && !expired && !full && String(p.status || "active").toLowerCase() !== "ended";
+      return { ready, completed, total: rows.length };
+    };
+
+    const available = [];
+    const challengeReady = new Map();
+    activeChallenges.forEach((entry) => {
+      const prize = prizes.find((p) => String(p.id) === String(entry.prize_id));
+      const mode = modes.find((m) => String(m.id) === String(entry.mode_id));
+      if (!prize || !mode || !prizeVisible(prize)) return;
+      const result = challengeProgress(prize, mode, entry);
+      if (result.ready) challengeReady.set(`${prize.id}:challenge`, { prize, mode, entry, progress: result, claimReady: true });
     });
-    const mine = wins.ok && Array.isArray(wins.data) ? wins.data : [];
-    // Prizes are paid in points: watch minutes, link shares, playlists,
-    // recommendations and comments, each at its own rate.
-    const mp = await C.memberPoints(state.member.member_id, state.profile || {});
-    const total = mp.available;
-    const minutes = Number(state.profile?.private_minutes || 0) + Number(state.profile?.public_minutes || 0);
-    const groups = {};
-    list.forEach((p) => {
-      groups[p.group_name] = groups[p.group_name] || [];
-      groups[p.group_name].push(p);
+    available.push(...challengeReady.values());
+    prizes.forEach((p) => {
+      if (!prizeVisible(p) || plainWinner(p)) return;
+      const prizeModes = modesOf(p);
+      const gift = prizeModes.find((mode) => modeKey(mode) === "gift");
+      if (gift) {
+        const result = modeState(p, gift);
+        if (result.canJoin) available.push({ prize: p, mode: gift, claimReady: false });
+      } else if (!prizeModes.length && canClaimPlain(p)) {
+        available.push({ prize: p, mode: null, claimReady: false, legacy: true });
+      }
     });
+
+    const challengePrizes = prizes.flatMap((p) => {
+      if (!prizeVisible(p) || String(p.status || "active").toLowerCase() === "ended") return [];
+      const mode = modesOf(p).find((row) => modeKey(row) === "challenge");
+      if (!mode) return [];
+      const status = modeState(p, mode);
+      const progressInfo = status.mine && String(status.mine.status || "").toLowerCase() === "competitor"
+        ? challengeProgress(p, mode, status.mine)
+        : null;
+      return [{ prize: p, mode, status, progress: progressInfo, claimReady: Boolean(progressInfo?.ready) }];
+    });
+    const lotteryPrizes = prizes.flatMap((p) => {
+      if (!prizeVisible(p) || String(p.status || "active").toLowerCase() === "ended") return [];
+      const mode = modesOf(p).find((row) => modeKey(row) === "lottery");
+      return mode ? [{ prize: p, mode, status: modeState(p, mode) }] : [];
+    });
+
+    const cards = (rows, kind) => rows.length
+      ? `<div class="dash-prize-grid">${rows.map((row) => {
+          const p = row.prize;
+          const mode = row.mode;
+          const modeName = mode ? modeKey(mode) : "gift";
+          const group = groupFor(p);
+          const gallery = [p.prize_image, ...(Array.isArray(p.images) ? p.images : String(p.images || "").split(/[\r\n]+/)), p.group_thumb, group?.thumb];
+          const image = gallery.map((url) => String(url || "").trim()).find((url) => /^https?:\/\//i.test(url)) || initialsAvatar(p.title || "CineAura");
+          const fallback = initialsAvatar(p.title || "CineAura");
+          const modeStatus = row.status || (mode ? modeState(p, mode) : null);
+          const entryStatus = kind === "mine" ? String(p.__entryStatus || "").toLowerCase() : "";
+          let action = t("dash.viewPrize");
+          const details = [];
+          if (kind === "mine" && entryStatus) details.push(t(`prize.status.${entryStatus}`));
+          if (row.claimReady && modeName === "challenge") action = t("pzm.confirmWin");
+          else if (kind === "available") action = t("prize.claim");
+          else if (kind === "mine" && entryStatus === "winner") action = p.__claimRequestedAt ? t("prize.claimRequested") : t("prize.claim");
+          else if (modeName === "challenge") {
+            action = String(modeStatus?.mine?.status || "").toLowerCase() === "winner"
+              ? modeStatus.mine.claim_requested_at ? t("prize.claimRequested") : t("prize.claim")
+              : modeStatus?.mine ? t("dash.continueChallenge") : modeStatus?.canJoin ? t("dash.joinChallenge") : t("dash.viewPrize");
+          } else if (modeName === "lottery") {
+            action = String(modeStatus?.mine?.status || "").toLowerCase() === "winner"
+              ? modeStatus.mine.claim_requested_at ? t("prize.claimRequested") : t("prize.claim")
+              : modeStatus?.mine ? t("dash.viewDraw") : modeStatus?.canJoin ? t("prize.enterLottery") : t("dash.viewPrize");
+          }
+          if (row.progress) details.push(t("dash.challengeProgress", { done: row.progress.completed, total: row.progress.total }));
+          const detail = details.join(" · ");
+          const cost = mode ? Number(mode.points_cost || 0) : Number(p.minutes_required || 0);
+          const winCount = mode
+            ? entriesOf(p, mode).filter((entry) => String(entry.status || "").toLowerCase() === "winner").length
+            : Number(p.winners_count || 0);
+          const cap = mode ? (modeName === "lottery" ? mode.winners_needed : mode.quantity) : p.winners_needed;
+          const people = cap == null || cap === "" ? `${winCount} ${t("prize.winners")}` : `${winCount}/${cap} ${t("prize.winners")}`;
+          const params = new URLSearchParams({ GroupPrize: String(p.group_id ?? 0), Prize: String(p.id), mode: modeName });
+          const href = `./Prize.html?${params.toString()}`;
+          const summary = [groupName(p), t("prize.points", { n: cost }), people, detail].filter(Boolean).join(" · ");
+          const badge = row.claimReady ? `<span class="dash-prize-badge ready">${escapeHtml(t("dash.readyToClaim"))}</span>` : mode ? `<span class="dash-prize-badge mode-${escapeHtml(modeName)}">${escapeHtml(t(`prize.mode.${modeName}`))}</span>` : "";
+          return `<a class="dash-prize-card glass" href="${escapeHtml(href)}">
+            <span class="dash-prize-image"><img src="${escapeHtml(image)}" alt="${escapeHtml(p.title || "")}" loading="lazy" onerror="this.onerror=null;this.src='${escapeHtml(fallback)}'" />${badge}</span>
+            <span class="dash-prize-body">
+              ${groupName(p) ? `<small class="dash-prize-group">${escapeHtml(groupName(p))}</small>` : ""}
+              <strong>${escapeHtml(p.title || "")}</strong>
+              <span class="dash-prize-description">${escapeHtml(p.description || "")}</span>
+              <span class="dash-prize-meta">${escapeHtml(summary)}</span>
+              <span class="btn btn-sm btn-primary dash-prize-cta">${escapeHtml(action)}</span>
+            </span>
+          </a>`;
+        }).join("")}</div>`
+      : `<p class="empty">${escapeHtml(t(kind === "available" ? "dash.noClaimablePrizes" : kind === "challenge" ? "dash.noChallenges" : kind === "lottery" ? "dash.noLotteries" : "dash.noYourPrizes"))}</p>`;
+
+    const myEntries = entries.filter((entry) => String(entry.member_id || "").toLowerCase() === memberKey);
+    const mineRows = [];
+    myEntries.forEach((entry) => {
+      const prize = prizes.find((p) => String(p.id) === String(entry.prize_id));
+      if (!prize) return;
+      const mode = modes.find((row) => String(row.id) === String(entry.mode_id)) || null;
+      const modeName = String(entry.mode || mode?.mode || "gift").toLowerCase();
+      const status = String(entry.status || "competitor").toLowerCase();
+      const p = { ...prize, __entryStatus: status, __entryMode: modeName, __claimRequestedAt: entry.claim_requested_at || null };
+      const progressInfo = modeName === "challenge" && mode ? challengeProgress(prize, mode, entry) : null;
+      mineRows.push({ prize: p, mode: mode || { mode: modeName, points_cost: entry.points_paid || 0 }, claimReady: status === "competitor" && Boolean(progressInfo?.ready), progress: progressInfo });
+    });
+    winners.forEach((winner) => {
+      if (mineRows.some((row) => String(row.prize.title) === String(winner.prize_title))) return;
+      const prize = prizes.find((p) => String(p.title) === String(winner.prize_title));
+      if (prize) mineRows.push({ prize: { ...prize, __entryStatus: "winner", __entryMode: "gift", __claimRequestedAt: winner.claim_requested_at || null }, mode: null });
+    });
+    mineRows.sort((a, b) => Number(b.claimReady) - Number(a.claimReady) || String(a.prize.title).localeCompare(String(b.prize.title)));
+
+    const groupsByName = {};
+    prizes.filter(prizeVisible).forEach((p) => {
+      const name = groupName(p) || t("dash.ungroupedPrizes");
+      const group = groupFor(p);
+      if (!groupsByName[name]) groupsByName[name] = { name, thumb: p.group_thumb || group?.thumb || "", count: 0, id: p.group_id };
+      groupsByName[name].count += 1;
+    });
+    const groupCards = Object.values(groupsByName).length
+      ? `<div class="dash-prize-grid">${Object.values(groupsByName).map((group) => {
+          const image = /^https?:\/\//i.test(String(group.thumb || "")) ? group.thumb : initialsAvatar(group.name);
+          const href = group.id == null ? "./Prize.html" : `./Prize.html?GroupPrize=${encodeURIComponent(group.id)}`;
+          return `<a class="dash-prize-group-card glass" href="${escapeHtml(href)}"><img src="${escapeHtml(image)}" alt="" loading="lazy" /><span><strong>${escapeHtml(group.name)}</strong><small>${escapeHtml(t("dash.nPrizes", { n: group.count }))}</small></span></a>`;
+        }).join("")}</div>`
+      : `<p class="empty">${escapeHtml(t("dash.noGroups"))}</p>`;
+
+    const tabs = [
+      { id: "available", label: t("dash.availablePrizes"), pane: cards(available, "available") },
+      { id: "challenge", label: t("prize.mode.challenge"), pane: cards(challengePrizes, "challenge") },
+      { id: "lottery", label: t("prize.mode.lottery"), pane: cards(lotteryPrizes, "lottery") },
+      { id: "mine", label: t("dash.yourPrizes"), pane: cards(mineRows, "mine") },
+      { id: "groups", label: t("dash.tabGroups"), pane: groupCards },
+    ];
     main.innerHTML = `
       <p class="eyebrow">${t("dash.rewards")}</p>
       <h1>${t("dash.prizes")}</h1>
-      <div class="stat"><b>${total}</b><span>${t("points.available")}</span></div>
+      <div class="stat"><b>${totalPoints}</b><span>${t("points.available")}</span></div>
       <div style="margin-top:14px">${C.pointsHtml(mp)}</div>
-      <p class="muted" style="margin-top:10px">${t("dash.totalPrivPub")}: <b>${minutes}</b></p>
-      <div class="cards" style="margin-top:16px">${
-        Object.keys(groups).length
-          ? Object.entries(groups).map(([g, arr]) => `
-            <article class="mini-card">
-              <img src="${arr[0].group_thumb || initialsAvatar(g)}" alt="" style="width:100%;height:90px;object-fit:cover;border-radius:10px;margin-bottom:8px" />
-              <h3>${escapeHtml(g)}</h3>
-              <p class="muted">${t("dash.nPrizes", { n: arr.length })}</p>
-            </article>`).join("")
-          : `<p class="empty">${t("dash.noGroups")}</p>`
-      }</div>
-      <h2 style="margin:22px 0 10px">${t("dash.availablePrizes")}</h2>
-      <div id="prize-list">${list.map((p) => `
-        <div class="mini-card" style="margin-bottom:10px">
-          <h3>${escapeHtml(p.title)}</h3>
-          <p class="muted">${escapeHtml(p.description||"")}</p>
-          <p>${escapeHtml(t("prize.points", { n: p.minutes_required }))} · ${p.winners_count||0}/${p.winners_needed||1} winners · ${escapeHtml(p.group_name||"")}</p>
-          <button class="btn btn-sm btn-primary" data-claim="${escapeHtml(p.title)}" ${total>=p.minutes_required?"":"disabled"} type="button">${t("dash.requestPrize")}</button>
-        </div>`).join("") || `<p class="empty">${t("dash.noPrizes")}</p>`}</div>
-      <h2 style="margin:22px 0 10px">${t("dash.yourPrizes")}</h2>
-      ${mine.length ? mine.map((w)=>`<p>${escapeHtml(w.prize_title)} · ${w.minutes_paid} min</p>`).join("") : `<p class="empty">${t("dash.noClaim")}</p>`}`;
-    main.onclick = async (e) => {
-      const btn = e.target.closest("[data-claim]");
-      if (!btn || btn.disabled) return;
-      const prize = list.find((p) => p.title === btn.dataset.claim);
-      if (!prize) return;
-      let paid = prize.minutes_required;
-      // The server checks the dates, quantity, audience and balance and spends the points
-      // in one locked step. Prizes with subscription modes are claimed through their gift mode.
-      const modes = await supabaseRequest(`/rest/v1/prize_modes?prize_id=eq.${prize.id}&select=mode,points_cost`);
-      const hasModes = modes.ok && Array.isArray(modes.data) && modes.data.length;
-      const gift = hasModes ? modes.data.find((m) => m.mode === "gift") : null;
-      if (hasModes && !gift) return toast(t("dash.prizeFail"));
-      if (gift) paid = gift.points_cost;
-      if (!confirm(t("dash.confirmPrize", { n: paid, title: prize.title }))) return;
-      const res = hasModes
-        ? await C.rpc("prize_join", { p_member: state.member.member_id, p_prize: prize.id, p_mode: "gift", p_code: null })
-        : await C.rpc("prize_claim_simple", { p_member: state.member.member_id, p_prize: prize.id });
-      if (!res.ok || !res.data?.ok) return toast(t("dash.prizeFail"));
-      state.profile.points_spent = Number(state.profile.points_spent || 0) + Number(res.data.cost ?? paid);
-      toast(t("dash.prizeOk"));
-      viewPrizes(main);
-    };
+      <p class="muted" style="margin-top:10px">${t("dash.totalPrivPub")}: <b>${totalMinutes}</b></p>
+      <div class="tabs follow-tabs dash-prize-tabs" data-tabbar role="tablist" aria-label="${escapeHtml(t("dash.prizes"))}">
+        ${tabs.map((tab) => `<button type="button" role="tab" class="follow-tab" data-dtab="prize-${tab.id}">${escapeHtml(tab.label)}</button>`).join("")}
+      </div>
+      ${tabs.map((tab) => `<section class="follow-pane dash-prize-pane" data-dpane="prize-${tab.id}" hidden><h2>${escapeHtml(tab.label)}</h2>${tab.pane}</section>`).join("")}`;
+    wireTabs(main, "prizeModes");
   }
 
   async function viewHistory(main) {
@@ -1685,7 +1918,6 @@
 
   viewLinks = tabbed(viewLinks, "links", { first: () => t("dash.addLink") });
   viewReports = tabbed(viewReports, "reports");
-  viewPrizes = tabbed(viewPrizes, "prizes", { first: () => t("dash.tabGroups") });
   viewHistory = tabbed(viewHistory, "history");
 
   document.addEventListener("DOMContentLoaded", boot);
