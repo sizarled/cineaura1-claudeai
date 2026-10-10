@@ -34,6 +34,9 @@ ROUTES = {
     "/Listchannels": "Listchannels.html",
     "/Playlist": "Playlist.html",
     "/Panel": "Panel.html",
+    "/Prize": "prize.html",
+    "/Prize.html": "prize.html",
+    "/Prizes": "prize.html",
 }
 
 

@@ -21,12 +21,13 @@
   const PANEL_KEY = "cineaura_panel";
   const ALL_SECTIONS = ["accounts", "links", "iptv", "reports", "prizes", "messages", "staff", "settings"];
   const FEATURES = ["links", "messages", "comments", "posts", "reports"];
+  const requestedSection = new URLSearchParams(location.search).get("section");
 
   const state = {
     staff: null,
     settings: { show_admin: true, show_moderator: true, show_member: false },
     staffRows: [],
-    section: "accounts",
+    section: ALL_SECTIONS.includes(requestedSection) ? requestedSection : "accounts",
     members: [],
     profiles: {},
     sanctions: {},
@@ -50,8 +51,9 @@
     }
   }
 
-  function setPanel(row, persist) {
+  function setPanel(row, persist, token) {
     const payload = {
+      token: token || row.token || "",
       id: row.id,
       role: row.role,
       member_id: row.member_id || "",
@@ -107,6 +109,46 @@
     return `<img src="${escapeHtml(avatarFor(memberId, username) || avatarUrlFor(memberId, username) || initialsAvatar(fallback || username || "CA"))}" alt="" data-avatar-for="${escapeHtml(memberId || "")}" data-avatar-name="${escapeHtml(String(username || "").replace(/^@/, ""))}" />`;
   }
 
+  // ---- staff medal: shown instead of the initials when a staff member has no picture ----
+  //   Super Admin = gold, Admin = silver, Moderator = bronze
+  const MEDAL_COLORS = {
+    super: ["#ffe08a", "#d99a1c", "#8a5a00"],
+    admin: ["#f4f7fa", "#9ba8b6", "#5d6b7a"],
+    moderator: ["#f2b786", "#b4692d", "#6e3b14"],
+  };
+  const medalCache = {};
+  function medalAvatar(role) {
+    const key = MEDAL_COLORS[role] ? role : "moderator";
+    if (medalCache[key]) return medalCache[key];
+    const [c1, c2, edge] = MEDAL_COLORS[key];
+    const star = Array.from({ length: 10 }, (_, i) => {
+      const r = i % 2 ? 3.6 : 8.4;
+      const a = (-90 + i * 36) * (Math.PI / 180);
+      return `${(40 + r * Math.cos(a)).toFixed(2)},${(50 + r * Math.sin(a)).toFixed(2)}`;
+    }).join(" ");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><defs><linearGradient id="m" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="80" height="80" rx="18" fill="#0d253f"/><path d="M25 7h12l9 26H34z" fill="#d64550"/><path d="M55 7H43l-9 26h12z" fill="#b8323d"/><circle cx="40" cy="50" r="20" fill="url(#m)" stroke="${edge}" stroke-width="2"/><circle cx="40" cy="50" r="14.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.5"/><polygon points="${star}" fill="${edge}" fill-opacity=".85"/></svg>`;
+    medalCache[key] = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    return medalCache[key];
+  }
+
+  const realAvatar = (memberId, username) => state.profiles[memberId]?.avatar_url || avatarUrlFor(memberId, username) || "";
+
+  function medalTag(role, memberId, username) {
+    const real = realAvatar(memberId, username);
+    return `<img src="${escapeHtml(real || medalAvatar(role))}" alt="${escapeHtml(roleLabel(role))}" title="${escapeHtml(roleLabel(role))}" data-medal="${escapeHtml(role || "")}" data-medal-for="${escapeHtml(memberId || "")}" data-medal-name="${escapeHtml(String(username || "").replace(/^@/, ""))}" onerror="this.onerror=null;this.src='${medalAvatar(role)}'" />`;
+  }
+
+  // Swap in the real picture once the profiles are known; the medal stays when there is none.
+  async function hydrateMedals(root) {
+    const nodes = [...(root || document).querySelectorAll("img[data-medal]")];
+    if (!nodes.length) return;
+    await primeAvatars(nodes.map((n) => n.dataset.medalFor), nodes.map((n) => n.dataset.medalName));
+    nodes.forEach((n) => {
+      const url = realAvatar(n.dataset.medalFor, n.dataset.medalName);
+      if (url) n.src = url;
+    });
+  }
+
   function overlay(html) {
     $$(".modal-back").forEach((el) => el.remove());
     const wrap = document.createElement("div");
@@ -121,7 +163,7 @@
   }
 
   async function loadStaffRows() {
-    const res = await supabaseRequest("/rest/v1/staff?select=*&order=created_at.asc");
+    const res = await supabaseRequest("/rest/v1/staff?select=id,role,member_id,username,sections,created_at&order=created_at.asc");
     state.staffRows = res.ok && Array.isArray(res.data) ? res.data : [];
   }
 
@@ -180,29 +222,25 @@
         if (setup) {
           if (pass !== $("#p-pass2").value) return alert("error", t("panel.mismatch"));
           const session = getSession();
-          const body = {
-            role: "super",
-            member_id: session?.member_id || "",
-            username: session?.username || "Super Admin",
-            password: hash,
-            sections: ALL_SECTIONS.join(","),
-          };
-          const ins = await supabaseRequest("/rest/v1/staff", { method: "POST", body: JSON.stringify(body) });
-          if (!ins.ok) return alert("error", t("panel.setupFail"));
-          const row = Array.isArray(ins.data) ? ins.data[0] : { ...body, id: 1 };
-          setPanel(row, $("#p-stay").checked);
+          const ins = await window.CineAura.rpc("staff_setup_super", {
+            p_member: session?.member_id || "",
+            p_username: session?.username || "Super Admin",
+            p_hash: hash,
+            p_sections: ALL_SECTIONS.join(","),
+          });
+          if (!ins.ok || !ins.data?.ok) return alert("error", t("panel.setupFail"));
+          setPanel(ins.data.staff, $("#p-stay").checked, ins.data.token);
           toast(t("panel.welcomeSuper"));
           await enterPanel();
           return;
         }
         const role = roleFromLogin($("#p-user").value);
         if (!role) return alert("error", t("panel.badUser"));
-        const res = await supabaseRequest(
-          `/rest/v1/staff?role=eq.${restValue(role)}&password=eq.${restValue(hash)}&select=*`
-        );
-        const row = res.ok && Array.isArray(res.data) ? res.data[0] : null;
-        if (!row) return alert("error", t("panel.badPass"));
-        setPanel(row, $("#p-stay").checked);
+        const res = await window.CineAura.rpc("staff_login", { p_role: role, p_hash: hash });
+        if (res.ok && res.data?.error === "locked") return alert("error", t("panel.locked"));
+        if (!res.ok || !res.data?.ok) return alert("error", t(res.ok ? "panel.badPass" : "panel.needSecure"));
+        const row = res.data.staff;
+        setPanel(row, $("#p-stay").checked, res.data.token);
         toast(t("panel.welcome", { role: roleLabel(row.role) }));
         await enterPanel();
       } catch (err) {
@@ -225,7 +263,7 @@
       <div class="dash-layout">
         <aside class="glass dash-side">
           <div class="side-user">
-            ${avatarTag(me.member_id, me.username, me.username)}
+            ${medalTag(me.role, me.member_id, me.username)}
             <strong>${escapeHtml(me.username || roleLabel(me.role))}</strong>
             <span class="panel-role">${escapeHtml(roleLabel(me.role))}</span>
             <span>${escapeHtml(me.member_id || "—")}</span>
@@ -243,12 +281,15 @@
       state.section = sec.dataset.section;
       renderShell();
     };
+    window.CineAura.mountSideToggle($("#panel-root .dash-layout"));
     $("#panel-out").onclick = () => {
+      if (state.staff?.token) window.CineAura.rpc("staff_logout", { p_token: state.staff.token });
       clearPanel();
       toast(t("panel.left"));
       boot();
     };
     hydrateAvatars($("#panel-root"));
+    hydrateMedals($("#panel-root"));
     renderSection();
   }
 
@@ -266,6 +307,7 @@
     };
     await (map[state.section] || viewAccounts)(main);
     hydrateAvatars(main);
+    hydrateMedals(main);
   }
 
   const accStatus = (m) => window.CineAura.normalizeAccountStatus(m.status);
@@ -633,94 +675,9 @@
     };
   }
 
+  // Prizes: three tabs (add / manage / statistics) live in js/panel-prizes.js.
   async function viewPrizes(main) {
-    const res = await supabaseRequest("/rest/v1/prizes?select=*&order=id.desc");
-    const list = res.ok && Array.isArray(res.data) ? res.data : [];
-    main.innerHTML = `
-      <p class="eyebrow">${t("panel.nav.prizes")}</p>
-      <h1>${t("panel.prizesTitle")}</h1>
-      <div class="stack" id="pz-form">
-        <input id="pz-title" placeholder="${t("panel.prizeName")}" />
-        <textarea id="pz-desc" placeholder="${t("panel.prizeDesc")}"></textarea>
-        <select id="pz-vis">
-          <option value="public">${t("common.public")}</option>
-          <option value="exclusive">${t("common.exclusive")}</option>
-          <option value="private">${t("common.private")}</option>
-        </select>
-        <div id="pz-ex" class="stack vis-fields" hidden>
-          <input id="pz-cty" placeholder="${t("dash.countriesPh")}" />
-          <div class="form-row">
-            <input id="pz-minage" type="number" placeholder="${t("prof.minAge")}" />
-            <input id="pz-maxage" type="number" placeholder="${t("dash.maxAge")}" />
-          </div>
-          <div class="form-row">
-            <select id="pz-wtype">
-              <option value="">${t("panel.watchedOpt")}</option>
-              <option value="movie">${t("common.movie")}</option>
-              <option value="tv">${t("common.series")}</option>
-            </select>
-            <input id="pz-wtmdb" placeholder="${t("panel.tmdbId")}" />
-          </div>
-        </div>
-        <input id="pz-people" class="vis-fields" hidden placeholder="${t("dash.peoplePh")}" />
-        <input id="pz-min" type="number" min="0" placeholder="${t("panel.minutesNeed")}" />
-        <div class="form-row">
-          <input id="pz-start" type="date" />
-          <input id="pz-end" type="date" />
-        </div>
-        <label class="lang-chip"><input type="checkbox" id="pz-forever" /> ${t("panel.unlimitedTime")}</label>
-        <input id="pz-qty" type="number" min="0" placeholder="${t("panel.quantity")}" />
-        <label class="lang-chip"><input type="checkbox" id="pz-unl" /> ${t("panel.unlimitedQty")}</label>
-        <button class="btn btn-lg btn-primary" id="pz-add" type="button">${t("panel.addPrize")}</button>
-      </div>
-      <h2 style="margin:22px 0 10px">${t("dash.availablePrizes")}</h2>
-      <div id="pz-list">${list.map((p) => `
-        <div class="mini-card" style="margin-bottom:10px">
-          <h3>${escapeHtml(p.title)}</h3>
-          <p class="muted">${escapeHtml(p.description || "")} · ${escapeHtml(tr(p.visibility || "public"))} · ${p.minutes_required} min</p>
-          <button class="btn btn-sm btn-danger" data-del-pz="${p.id}" type="button">${t("common.delete")}</button>
-        </div>`).join("") || `<p class="empty">${t("dash.noPrizes")}</p>`}</div>`;
-    const syncVis = () => {
-      const vis = $("#pz-vis").value;
-      $("#pz-ex").hidden = vis !== "exclusive";
-      $("#pz-people").hidden = vis !== "private";
-    };
-    $("#pz-vis").onchange = syncVis;
-    $("#pz-add").onclick = async () => {
-      const title = $("#pz-title").value.trim();
-      const description = $("#pz-desc").value.trim();
-      if (!title || !description) return toast(t("panel.needPrize"));
-      const unlimitedTime = $("#pz-forever").checked;
-      const unlimitedQty = $("#pz-unl").checked;
-      const body = {
-        title,
-        description,
-        visibility: $("#pz-vis").value,
-        countries: $("#pz-cty")?.value.trim() || "",
-        min_age: Number($("#pz-minage").value) || null,
-        max_age: Number($("#pz-maxage").value) || null,
-        watched_type: $("#pz-wtype").value || "",
-        watched_tmdb: Number($("#pz-wtmdb").value) || null,
-        allowed_usernames: $("#pz-people").value.trim(),
-        minutes_required: Math.max(0, Number($("#pz-min").value) || 0),
-        starts_at: $("#pz-start").value || null,
-        ends_at: unlimitedTime ? null : $("#pz-end").value || null,
-        unlimited_time: unlimitedTime,
-        quantity: unlimitedQty ? null : (Number($("#pz-qty").value) || null),
-        group_name: "General",
-      };
-      const ins = await supabaseRequest("/rest/v1/prizes", { method: "POST", body: JSON.stringify(body) });
-      if (!ins.ok) return toast(t("panel.actFail"));
-      toast(t("panel.prizeAdded"));
-      viewPrizes(main);
-    };
-    main.onclick = async (e) => {
-      const del = e.target.closest("[data-del-pz]");
-      if (!del) return;
-      await supabaseRequest(`/rest/v1/prizes?id=eq.${del.dataset.delPz}`, { method: "DELETE" });
-      toast(t("common.remove"));
-      viewPrizes(main);
-    };
+    await window.PanelPrizes.render(main, { staff: state.staff });
   }
 
   // ---------- Messages: admin team chat + member requests ----------
@@ -923,7 +880,7 @@
           const snippet = last ? `${mine ? `${t("prof.you")}: ` : ""}${escapeHtml(last.body)}` : t("panel.staffChatStart");
           return `<div class="mp-row${c.unread ? " mp-unread" : ""}">
             <div class="mp-avatar off">
-              <img src="${escapeHtml(c.avatar || initialsAvatar(c.username))}" alt="" data-avatar-for="${escapeHtml(c.member_id)}" data-avatar-name="${escapeHtml(c.username)}" />
+              ${medalTag(c.role, c.member_id, c.username)}
             </div>
             <div class="mp-main">
               <div class="mp-top"><strong>${escapeHtml(c.username)}</strong><span class="chip staff-chip">${escapeHtml(roleLabel(c.role))}</span></div>
@@ -943,6 +900,7 @@
       if (conv) openStaffChat(conv, () => viewMessages(main));
     };
     hydrateAvatars(pane);
+    hydrateMedals(pane);
   }
 
   function renderRequests(pane, req, main) {
@@ -1496,7 +1454,7 @@
       ${others.map((s) => `
         <div class="mini-card" style="margin-bottom:10px">
           <div class="staff-line">
-            ${avatarTag(s.member_id, s.username, s.username || s.member_id)}
+            ${medalTag(s.role, s.member_id, s.username)}
             <h3>${escapeHtml(s.username || s.member_id)} · ${roleLabel(s.role)}</h3>
           </div>
           <p class="muted">${escapeHtml(s.member_id)} · ${escapeHtml(s.sections || "")}</p>
@@ -1518,17 +1476,10 @@
       if (!row) return toast(t("panel.memberMissing"));
       if (staffRoleOf(memberId) === "super") return toast(t("panel.noAct"));
       const sections = $$('input[name="st-s"]:checked').map((el) => el.value).join(",");
-      const ins = await supabaseRequest("/rest/v1/staff", {
-        method: "POST",
-        body: JSON.stringify({
-          role,
-          member_id: row.member_id,
-          username: row.username,
-          password: await sha256(pass),
-          sections,
-        }),
+      const ins = await window.CineAura.rpc("staff_add", {
+        p_token: state.staff.token, p_member: row.member_id, p_role: role, p_hash: await sha256(pass), p_sections: sections,
       });
-      if (!ins.ok) return toast(t("panel.actFail"));
+      if (!ins.ok || !ins.data?.ok) return toast(t("panel.actFail"));
       toast(t("panel.staffAdded"));
       viewStaff(main);
     };
@@ -1537,15 +1488,12 @@
       const del = e.target.closest("[data-del-st]");
       if (save) {
         const sections = $$(`input[data-sid="${save.dataset.saveSec}"]:checked`).map((el) => el.value).join(",");
-        await supabaseRequest(`/rest/v1/staff?id=eq.${save.dataset.saveSec}`, {
-          method: "PATCH",
-          body: JSON.stringify({ sections }),
-        });
+        await window.CineAura.rpc("staff_set_sections", { p_token: state.staff.token, p_id: Number(save.dataset.saveSec), p_sections: sections });
         toast(t("panel.saved"));
         viewStaff(main);
       }
       if (del) {
-        await supabaseRequest(`/rest/v1/staff?id=eq.${del.dataset.delSt}`, { method: "DELETE" });
+        await window.CineAura.rpc("staff_remove", { p_token: state.staff.token, p_id: Number(del.dataset.delSt) });
         toast(t("panel.staffRemoved"));
         viewStaff(main);
       }
@@ -1576,11 +1524,8 @@
       const b = $("#np2").value;
       if (a.length < 8) return toast(t("panel.pass8"));
       if (a !== b) return toast(t("panel.mismatch"));
-      const res = await supabaseRequest(`/rest/v1/staff?id=eq.${state.staff.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ password: await sha256(a) }),
-      });
-      if (!res.ok) return toast(t("panel.actFail"));
+      const res = await window.CineAura.rpc("staff_set_password", { p_token: state.staff.token, p_hash: await sha256(a) });
+      if (!res.ok || !res.data?.ok) return toast(t("panel.actFail"));
       toast(t("panel.passChanged"));
       $("#np1").value = "";
       $("#np2").value = "";
@@ -1626,10 +1571,11 @@
       return;
     }
     if (existing?.id && existing?.role) {
-      const check = await supabaseRequest(`/rest/v1/staff?id=eq.${existing.id}&select=*`);
-      const row = check.data?.[0];
+      const check = existing.token ? await window.CineAura.rpc("staff_session", { p_token: existing.token }) : null;
+      const row = check?.ok ? check.data : null;
       if (row) {
         state.staff = {
+          token: existing.token,
           id: row.id,
           role: row.role,
           member_id: row.member_id || "",

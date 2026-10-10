@@ -608,3 +608,11 @@ body.auth-locked a[href*="register.html"] {
 }
 
 html[dir="rtl"] .auth-gate-note { text-align: right; }
+
+/* Collapsible side menu */
+.side-toggle-bar { grid-column: 1 / -1; display: flex; }
+.side-toggle { display: inline-flex; align-items: center; gap: 8px; }
+.dash-layout.side-collapsed,
+.prof-layout.side-collapsed { grid-template-columns: minmax(0, 1fr); }
+.dash-layout.side-collapsed > aside,
+.prof-layout.side-collapsed > aside { display: none; }

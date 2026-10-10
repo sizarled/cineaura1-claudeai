@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <script src="js/prefs.js"></script>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Playlist — CineAura</title>
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/pages.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/facebook.css" />
-  <link rel="stylesheet" href="css/mobile.css" />
 </head>
 <body class="page-inner">
   <div class="bg-orbs" aria-hidden="true"><div class="orb orb-cyan"></div></div>
@@ -87,8 +86,7 @@
         <h1>${escapeHtml(pl.name)}</h1>
         <p class="muted">${escapeHtml(pl.description||"")} · ${t("common.nViewers", { n: Number(pl.viewers||0) })}</p>
         <div class="pl-share">${shareRowHtml(`./Playlist.html?ID=${encodeURIComponent(id)}`, `${pl.name} — @${pl.owner_username} · CineAura`)}</div>
-        <div class="ad-spot" data-ad="inline"></div>
-                ${pl.rules && vis === "exclusive" ? `<p class="muted">${t("common.conditions")}: ${escapeHtml(pl.rules)}</p>` : ""}
+        ${pl.rules && vis === "exclusive" ? `<p class="muted">${t("common.conditions")}: ${escapeHtml(pl.rules)}</p>` : ""}
         ${list.map((it)=>`<div class="item-row">
           <img src="${it.poster_path?imgUrl(it.poster_path,"w92"):initialsAvatar(it.title)}" alt="" />
           <div><strong>${escapeHtml(it.title||t("common.title"))}</strong></div>
@@ -97,6 +95,5 @@
       </section>`;
     });
   </script>
-  <script src="js/ads.js"></script>
 </body>
 </html>

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <script src="js/prefs.js"></script>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Account Recovery — CineAura</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Cast — CineAura</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230d253f'/%3E%3Cpolygon points='26,18 48,32 26,46' fill='%2390cea1'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/pages.css" />
   <link rel="stylesheet" href="css/facebook.css" />
+  <link rel="stylesheet" href="css/mobile.css" />
 </head>
 <body class="page-inner">
   <div class="bg-orbs" aria-hidden="true">
@@ -34,6 +35,7 @@
           <a href="./#movies" data-i18n="nav.movies">Movies</a>
           <a href="./#series" data-i18n="nav.series">Series</a>
           <a href="./#iptv" data-i18n="nav.iptv">IPTV</a>
+          <a href="./Prize.html" data-i18n="nav.prizes">Prizes</a>
           <a href="./#plans" data-i18n="nav.plans">Plans & Pricing</a>
           <a href="./#support" data-i18n="nav.support">Support</a>
         </nav>
@@ -63,6 +65,7 @@
       <a href="./#movies" data-i18n="nav.movies">Movies</a>
       <a href="./#series" data-i18n="nav.series">Series</a>
       <a href="./#iptv" data-i18n="nav.iptv">IPTV</a>
+      <a href="./Prize.html" data-i18n="nav.prizes">Prizes</a>
       <a href="./#plans" data-i18n="nav.plans">Plans & Pricing</a>
       <a href="./#support" data-i18n="nav.supportFull">Support & Contact</a>
       <div class="mobile-auth-guest">
@@ -75,67 +78,8 @@
       </div>
     </div>
 
-    <main class="page-main">
-      <section class="auth-shell">
-        <aside class="glass auth-visual" id="auth-visual">
-          <span class="media-badge" data-i18n="rest.badge">Account recovery</span>
-          <h2 data-i18n="rest.h2">Lost the key. Keep the seat.</h2>
-          <p data-i18n="rest.p">Enter the 16-character recovery code from your signup file to set a new password.</p>
-        </aside>
-
-        <form class="glass auth-card" id="code-form" novalidate>
-          <span class="eyebrow" data-i18n="rest.eyebrow">Rest</span>
-          <h1 data-i18n="rest.title">Recover your account</h1>
-          <p class="lead" data-i18n="rest.lead">Paste the recovery code you saved when you created the account.</p>
-          <div class="form-alert" id="code-alert"></div>
-          <div class="auth-grid auth-single">
-            <label class="auth-full">
-              <span data-i18n="rest.code">Recovery code</span>
-              <input class="recovery-input" id="recovery-input" name="recovery" maxlength="16" autocomplete="one-time-code" data-i18n-placeholder="rest.codePh" placeholder="16 characters, no spaces" />
-            </label>
-            <div class="auth-full">
-              <button class="btn btn-lg btn-primary auth-submit" type="submit" id="code-btn" data-i18n="rest.continue">Continue</button>
-            </div>
-          </div>
-          <p class="auth-switch"><a href="./login.html" data-i18n="rest.backLogin">Back to login</a> · <a href="./register.html" data-i18n="rest.create">Create an account</a></p>
-        </form>
-
-        <form class="glass auth-card" id="password-form" hidden novalidate>
-          <span class="eyebrow" data-i18n="rest.newPass">New password</span>
-          <h1 data-i18n="rest.setPass">Set a new password</h1>
-          <p class="lead" data-i18n="rest.passLead">Enter the same password twice. It must be at least 8 characters.</p>
-          <div class="form-alert" id="password-alert"></div>
-          <div class="auth-grid auth-single">
-            <label class="auth-full">
-              <span data-i18n="rest.newPass">New password</span>
-              <span class="password-wrap">
-                <input type="password" name="password" id="new-password" autocomplete="new-password" required minlength="8" />
-                <button type="button" id="toggle-password" data-i18n-aria="auth.showPass" aria-label="Show password">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/></svg>
-                </button>
-              </span>
-            </label>
-            <label class="auth-full">
-              <span data-i18n="rest.confirm">Confirm password</span>
-              <input type="password" name="confirm" id="confirm-password" autocomplete="new-password" required minlength="8" />
-            </label>
-            <div class="auth-full">
-              <button class="btn btn-lg btn-primary auth-submit" type="submit" id="save-btn" data-i18n="rest.savePass">Save password</button>
-            </div>
-          </div>
-        </form>
-
-        <section class="glass auth-card success-card" id="success-card" hidden>
-          <span class="eyebrow" data-i18n="rest.recovered">Recovered</span>
-          <h1 data-i18n="rest.ok">Password restored successfully</h1>
-          <p class="lead" data-i18n="rest.okLead">Your new password is saved. Download your account details and continue to the dashboard.</p>
-          <div class="success-meta" id="success-meta"></div>
-          <div class="success-actions">
-            <button class="btn btn-lg btn-primary" id="download-txt" type="button" data-i18n="rest.download">Download details</button>
-            <a class="btn btn-lg btn-ghost" href="./dashboard.html" data-i18n="auth.goDash">Go to Dashboard</a>
-          </div>
-        </section>
-      </section>
+    <main class="page-main" id="cast-root">
+      <div class="loader" id="page-loader" style="position:relative;min-height:40vh"><div class="spinner"></div></div>
     </main>
   </div>
 
@@ -143,6 +87,8 @@
   <script src="js/i18n.js"></script>
   <script src="js/lang.js"></script>
   <script src="js/common.js"></script>
-  <script src="js/rest.js"></script>
+  <script src="js/post-rich.js"></script>
+  <script src="js/cast.js"></script>
+  <script src="js/ads.js"></script>
 </body>
 </html>

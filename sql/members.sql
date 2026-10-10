@@ -22,6 +22,23 @@ alter table public.members add column if not exists membership_type text default
 alter table public.members add column if not exists membership_duration text default '1 month';
 alter table public.members add column if not exists membership_expires_at timestamptz;
 alter table public.members add column if not exists watch_minutes integer default 0;
+alter table public.members add column if not exists referred_by_member_id text;
+alter table public.members add column if not exists referred_post_id text;
+
+-- One row per genuinely new account attributed to a shared post link.
+-- This private table is the deduplication ledger; member_id points to the
+-- person who registered, while referrer_member_id is the member who shared.
+create table if not exists public.member_referrals (
+  referred_member_id text primary key references public.members(member_id) on delete cascade,
+  referrer_member_id text not null references public.members(member_id),
+  referred_post_id text not null,
+  post_owner_id text not null default '',
+  created_at timestamptz not null default now(),
+  constraint member_referrals_not_self check (referred_member_id <> referrer_member_id)
+);
+
+alter table public.member_referrals enable row level security;
+revoke all on table public.member_referrals from public, anon, authenticated;
 
 alter table public.members drop constraint if exists members_gender_check;
 alter table public.members add constraint members_gender_check
@@ -57,6 +74,9 @@ comment on column public.members.membership_type is 'Free | Silver | Gold | Diam
 comment on column public.members.membership_duration is 'Plan length, e.g. 1 month, 3 months, 6 months, 12 months';
 comment on column public.members.membership_expires_at is 'When the current membership ends';
 comment on column public.members.watch_minutes is 'Total minutes watched';
+comment on column public.members.referred_by_member_id is 'Member whose shared post link led this visitor to register';
+comment on column public.members.referred_post_id is 'Post shared by the referring member';
+comment on table public.member_referrals is 'Private, one-time attribution for a member registered from a shared post link';
 
 alter table public.members enable row level security;
 
@@ -74,8 +94,77 @@ create policy "Anyone can register"
   to anon, authenticated
   with check (true);
 
+-- Client share buttons only build referral URLs. This trigger writes a share
+-- event only after a new member row is actually inserted, and the private
+-- member_referrals primary key makes that conversion count once per account.
+create or replace function public.record_member_referral_signup()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  referrer_username text;
+  post_owner text;
+  inserted_count integer := 0;
+begin
+  if new.referred_by_member_id is null
+     or new.referred_post_id is null
+     or new.member_id = new.referred_by_member_id
+     or new.referred_by_member_id !~ '^ID[0-9]+$'
+     or new.referred_post_id !~ '^[A-Za-z0-9._-]{1,80}$' then
+    return new;
+  end if;
+
+  -- Keep registration working if the content/analytics schema has not been
+  -- installed yet. Referral links are credited once those tables are present.
+  if to_regclass('public.posts') is null or to_regclass('public.post_events') is null then
+    return new;
+  end if;
+
+  select username into referrer_username
+  from public.members
+  where member_id = new.referred_by_member_id
+    and status <> 'banned'
+  limit 1;
+  if not found then return new; end if;
+
+  execute 'select owner_id from public.posts where post_id = $1 limit 1'
+    into post_owner using new.referred_post_id;
+  if post_owner is null then return new; end if;
+
+  insert into public.member_referrals (
+    referred_member_id, referrer_member_id, referred_post_id, post_owner_id, created_at
+  ) values (
+    new.member_id, new.referred_by_member_id, new.referred_post_id, post_owner, coalesce(new.created_at, now())
+  )
+  on conflict (referred_member_id) do nothing;
+  get diagnostics inserted_count = row_count;
+  if inserted_count = 0 then return new; end if;
+
+  execute 'insert into public.post_events (post_id, owner_id, kind, network, member_id, username, created_at)
+           values ($1, $2, ''share'', ''referral'', $3, $4, $5)'
+    using new.referred_post_id, post_owner, new.referred_by_member_id, referrer_username, coalesce(new.created_at, now());
+
+  return new;
+exception
+  when undefined_table then
+    -- A partially installed site should still be able to accept sign-ups.
+    return new;
+end;
+$$;
+
+revoke all on function public.record_member_referral_signup() from public, anon, authenticated;
+drop trigger if exists members_record_referral on public.members;
+create trigger members_record_referral
+  after insert on public.members
+  for each row execute function public.record_member_referral_signup();
+
+-- Replace the previous RPC signature so PostgREST cannot see two overloads
+-- when a referred visitor passes the optional attribution fields.
 drop function if exists public.register_member(text, text, text, text, text, date);
 drop function if exists public.register_member(text, text, text, text, text, date, text);
+drop function if exists public.register_member(text, text, text, text, text, date, text, text);
 
 create or replace function public.register_member(
   p_full_name text,
@@ -85,7 +174,9 @@ create or replace function public.register_member(
   p_country text,
   p_birth_date date,
   p_recovery_code text default null,
-  p_gender text default null
+  p_gender text default null,
+  p_referred_by_member_id text default null,
+  p_referred_post_id text default null
 ) returns json
 language plpgsql
 security definer
@@ -152,7 +243,8 @@ begin
 
   insert into members (
     member_id, full_name, username, status, email, password, country, birth_date,
-    recovery_code, gender, membership_type, membership_duration, membership_expires_at, watch_minutes
+    recovery_code, gender, membership_type, membership_duration, membership_expires_at, watch_minutes,
+    referred_by_member_id, referred_post_id
   ) values (
     new_id,
     trim(p_full_name),
@@ -170,7 +262,21 @@ begin
     'Free',
     '1 month',
     now() + interval '1 month',
-    0
+    0,
+    case
+      when p_referred_by_member_id ~ '^ID[0-9]+$'
+       and p_referred_by_member_id <> new_id
+       and p_referred_post_id ~ '^[A-Za-z0-9._-]{1,80}$'
+      then p_referred_by_member_id
+      else null
+    end,
+    case
+      when p_referred_by_member_id ~ '^ID[0-9]+$'
+       and p_referred_by_member_id <> new_id
+       and p_referred_post_id ~ '^[A-Za-z0-9._-]{1,80}$'
+      then p_referred_post_id
+      else null
+    end
   );
 
   return json_build_object(
@@ -182,7 +288,7 @@ begin
 end;
 $$;
 
-grant execute on function public.register_member(text, text, text, text, text, date, text, text)
+grant execute on function public.register_member(text, text, text, text, text, date, text, text, text, text)
   to anon, authenticated;
 
 drop policy if exists "Update password via recovery" on public.members;
@@ -289,3 +395,5 @@ $$;
 
 grant execute on function public.login_member(text, text) to anon, authenticated;
 grant execute on function public.reset_password_with_recovery(text, text) to anon, authenticated;
+
+notify pgrst, 'reload schema';

@@ -252,3 +252,22 @@ html[dir="rtl"] .bubble.mine {
   margin-left: 0;
   margin-right: auto;
 }
+
+/* Prize subscription modes (gift / challenge / lottery) editor */
+.pz-modes { margin: 10px 0; border-top: 1px dashed var(--line); padding-top: 8px; }
+.pz-modes > summary { cursor: pointer; font-weight: 650; font-size: 13.5px; color: var(--cyan); }
+.pz-mode-row {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--input-bg);
+  display: grid;
+  gap: 6px;
+}
+.pz-mode-row input[type="number"],
+.pz-mode-row input[type="date"],
+.pz-mode-row select { min-width: 0; }
+.pz-mode-row input:disabled { opacity: .5; }
+.pz-conds { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 6px; display: grid; gap: 5px; }
+.pz-conds .form-row { align-items: center; }

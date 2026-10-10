@@ -1827,3 +1827,78 @@ body.is-logged-in .guest-only {
     display: none;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   Points box — how a member earns and spends points (shared by the prize
+   dialog, the prize page and the dashboard; rendered by CineAura.pointsHtml)
+   ════════════════════════════════════════════════════════════════════ */
+.pt-box {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--input-bg);
+  padding: 14px;
+  margin-top: 16px;
+}
+.pt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.pt-total {
+  font-size: 26px;
+  color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.pt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pt-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.pt-row:last-child { border-bottom: 0; }
+.pt-src { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pt-src b { font-size: 14px; font-weight: 650; }
+.pt-src small { color: var(--muted); font-size: 12px; }
+.pt-count {
+  color: var(--muted);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: end;
+}
+.pt-pts {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: end;
+}
+.pt-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.pt-foot b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 480px) {
+  .pt-src small { font-size: 11.5px; }
+  .pt-count, .pt-pts { min-width: 34px; }
+}

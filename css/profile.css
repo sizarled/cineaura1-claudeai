@@ -130,6 +130,17 @@
   margin: 0 0 6px;
 }
 
+/* Owner-only numbers under the follower counts (ownStatsHtml in profile.js).
+   The points figure is the headline; the age is a phrase, so it is set smaller. */
+.prof-stats {
+  margin: 12px 0;
+}
+
+.prof-stats .stat b.prof-age {
+  font-size: 17px;
+  line-height: 1.4;
+}
+
 .prof-actions {
   display: flex;
   flex-wrap: wrap;
