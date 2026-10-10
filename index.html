@@ -11,6 +11,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/prize.css" />
+  <link rel="stylesheet" href="css/browse.css" />
   <link rel="stylesheet" href="css/facebook.css" />
   <link rel="stylesheet" href="css/mobile.css" />
 </head>
@@ -40,6 +42,7 @@
           <a href="#movies" data-i18n="nav.movies">Movies</a>
           <a href="#series" data-i18n="nav.series">Series</a>
           <a href="#iptv" data-i18n="nav.iptv">IPTV</a>
+          <a href="#prizes" data-i18n="nav.prizes">Prizes</a>
           <a href="#plans" data-i18n="nav.plans">Plans & Pricing</a>
           <a href="#support" data-i18n="nav.support">Support</a>
         </nav>
@@ -72,6 +75,7 @@
       <a href="#movies" data-i18n="nav.movies">Movies</a>
       <a href="#series" data-i18n="nav.series">Series</a>
       <a href="#iptv" data-i18n="nav.iptv">IPTV</a>
+      <a href="#prizes" data-i18n="nav.prizes">Prizes</a>
       <a href="#plans" data-i18n="nav.plans">Plans & Pricing</a>
       <a href="#support" data-i18n="nav.supportFull">Support & Contact</a>
       <div class="mobile-auth-guest">
@@ -180,10 +184,24 @@
         </div>
       </section>
 
+      <section class="section" id="prizes">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <div class="kicker"><span class="kicker-num">02</span><span class="eyebrow" data-i18n="prize.eyebrow">Rewards</span></div>
+              <h2 data-i18n="prize.h1">Prizes</h2>
+            </div>
+            <p data-i18n="prize.topLead">The 20 most popular prizes, ranked by number of subscribers.</p>
+          </div>
+          <div id="home-top-prizes"><div class="loader" style="display:grid"><div class="spinner"></div></div></div>
+          <p style="margin-top:20px"><a class="btn btn-lg btn-ghost" href="./Prize.html" data-i18n="prize.viewAll">View all prizes</a></p>
+        </div>
+      </section>
+
       <section class="section search-section" id="search">
         <div class="container">
           <div class="glass search-box">
-            <div class="kicker"><span class="kicker-num">02</span><span class="eyebrow" data-i18n="home.search.kicker">Catalog search</span></div>
+            <div class="kicker"><span class="kicker-num">03</span><span class="eyebrow" data-i18n="home.search.kicker">Catalog search</span></div>
             <h2 data-i18n="home.search.h2">Find any movie or series</h2>
             <p class="lead" data-i18n="home.search.lead">Google search, tuned to The Movie Database. Pick a title and CineAura opens the watch page; a TMDB person link opens that person’s Cast page. YouTube results stay closed.</p>
             <div class="cse-wrap">
@@ -198,8 +216,11 @@
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="kicker"><span class="kicker-num">03</span><span class="eyebrow" data-i18n="home.movies.kicker">Now trending</span></div>
-              <h2 data-i18n="home.movies.h2">Featured Movies</h2>
+              <div class="kicker"><span class="kicker-num">04</span><span class="eyebrow" data-i18n="home.movies.kicker">Now trending</span></div>
+              <div class="br-title-row">
+                <h2 data-i18n="home.movies.h2">Featured Movies</h2>
+                <a class="btn btn-sm btn-ghost" href="./movies.html" data-i18n="browse.viewAll">View all</a>
+              </div>
             </div>
             <p data-i18n="home.movies.p">Twenty of this week’s most-watched films. Swipe or scroll sideways to browse.</p>
           </div>
@@ -213,8 +234,11 @@
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="kicker"><span class="kicker-num">04</span><span class="eyebrow" data-i18n="home.series.kicker">Binge-worthy</span></div>
-              <h2 data-i18n="home.series.h2">Featured Series</h2>
+              <div class="kicker"><span class="kicker-num">05</span><span class="eyebrow" data-i18n="home.series.kicker">Binge-worthy</span></div>
+              <div class="br-title-row">
+                <h2 data-i18n="home.series.h2">Featured Series</h2>
+                <a class="btn btn-sm btn-ghost" href="./series.html" data-i18n="browse.viewAll">View all</a>
+              </div>
             </div>
             <p data-i18n="home.series.p">Twenty trending shows with posters, premiere dates, and live TMDB scores. Scroll sideways to browse.</p>
           </div>
@@ -228,7 +252,7 @@
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="kicker"><span class="kicker-num">05</span><span class="eyebrow" data-i18n="home.iptv.kicker">Live television</span></div>
+              <div class="kicker"><span class="kicker-num">06</span><span class="eyebrow" data-i18n="home.iptv.kicker">Live television</span></div>
               <h2 data-i18n="home.iptv.h2">IPTV Channels</h2>
             </div>
             <p data-i18n="home.iptv.p">Jump into free public streams or unlock the premium live lineup.</p>
@@ -257,11 +281,25 @@
         </div>
       </section>
 
+      <section class="section" id="prizes-strip">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <div class="kicker"><span class="kicker-num">07</span><span class="eyebrow" data-i18n="prize.homeKicker">Win something</span></div>
+              <h2 data-i18n="prize.available">Available prizes</h2>
+            </div>
+            <p data-i18n="prize.homeP">Open prizes you can subscribe to right now.</p>
+          </div>
+          <div id="home-prizes"><div class="loader" style="display:grid"><div class="spinner"></div></div></div>
+          <p style="margin-top:20px"><a class="btn btn-lg btn-ghost" href="./Prize.html" data-i18n="prize.viewAll">View all prizes</a></p>
+        </div>
+      </section>
+
       <section class="section" id="plans">
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="kicker"><span class="kicker-num">06</span><span class="eyebrow" data-i18n="home.plans.kicker">Membership</span></div>
+              <div class="kicker"><span class="kicker-num">08</span><span class="eyebrow" data-i18n="home.plans.kicker">Membership</span></div>
               <h2 data-i18n="home.plans.h2">Plans & Pricing</h2>
             </div>
             <p data-i18n="home.plans.p">Every plan needs an account. Choose how long your access code stays active.</p>
@@ -348,7 +386,7 @@
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="kicker"><span class="kicker-num">07</span><span class="eyebrow" data-i18n="home.support.kicker">We’re here</span></div>
+              <div class="kicker"><span class="kicker-num">09</span><span class="eyebrow" data-i18n="home.support.kicker">We’re here</span></div>
               <h2 data-i18n="home.support.h2">Support & Contact</h2>
             </div>
             <p data-i18n="home.support.p">Send a message or reach the team on WhatsApp and Telegram.</p>
@@ -420,6 +458,7 @@
             <a href="#movies" data-i18n="nav.movies">Movies</a>
             <a href="#series" data-i18n="nav.series">Series</a>
             <a href="#iptv" data-i18n="nav.iptv">IPTV</a>
+            <a href="./Prize.html" data-i18n="nav.prizes">Prizes</a>
             <a href="#search" data-i18n="nav.search">Search</a>
           </div>
           <div>
@@ -450,5 +489,7 @@
   <script src="js/lang.js"></script>
   <script src="js/common.js"></script>
   <script src="js/main.js"></script>
+  <script src="js/prize-rules.js"></script>
+  <script src="js/prize.js"></script>
 </body>
 </html>

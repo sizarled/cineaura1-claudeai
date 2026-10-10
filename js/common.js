@@ -1479,6 +1479,158 @@
     return true;
   }
 
+  // ---------- Collapsible side menu (dashboard, panel, profile) ----------
+  const SIDE_KEY = "cineaura_side_hidden";
+
+  function sideHidden() {
+    try {
+      return localStorage.getItem(SIDE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  // Adds a "Hide menu / Show menu" button above the sidebar layout and applies the
+  // remembered state. Call it again after every re-render of the layout.
+  function mountSideToggle(layout) {
+    if (!layout || !layout.querySelector("aside")) return;
+    layout.querySelector(":scope > .side-toggle-bar")?.remove();
+    const bar = document.createElement("div");
+    bar.className = "side-toggle-bar";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm btn-ghost side-toggle";
+    btn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg><span></span>';
+    const label = btn.querySelector("span");
+    const apply = (hidden) => {
+      layout.classList.toggle("side-collapsed", hidden);
+      btn.setAttribute("aria-expanded", String(!hidden));
+      label.textContent = t(hidden ? "side.show" : "side.hide");
+    };
+    btn.addEventListener("click", () => {
+      const hidden = !layout.classList.contains("side-collapsed");
+      try {
+        localStorage.setItem(SIDE_KEY, hidden ? "1" : "0");
+      } catch {
+        /* storage blocked: the toggle still works for this view */
+      }
+      apply(hidden);
+    });
+    bar.appendChild(btn);
+    layout.prepend(bar);
+    apply(sideHidden());
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     Points
+
+     A member earns points from five sources, each at its own rate:
+
+       1 watch minute — yours or through your link —   = 1 point
+       5 link shares                                   = 1 point
+       10 public or exclusive playlists                = 1 point
+       50 public or exclusive recommendations          = 1 point
+       100 comments                                    = 1 point
+
+     Fractions are dropped (12 shares are worth 2 points, not 2.4). What a
+     member can spend is what they earned minus what they already spent
+     (profiles.points_spent), so the bonus points of a source cannot be spent
+     twice and the watch minutes themselves are never destroyed.
+     ════════════════════════════════════════════════════════════════════ */
+  const POINT_RATES = [
+    { key: "minutes", per: 1, src: "points.src.minutes", rate: "points.rate.minutes" },
+    { key: "shares", per: 5, src: "points.src.shares", rate: "points.rate.shares" },
+    { key: "playlists", per: 10, src: "points.src.playlists", rate: "points.rate.playlists" },
+    { key: "recommendations", per: 50, src: "points.src.recs", rate: "points.rate.recs" },
+    { key: "comments", per: 100, src: "points.src.comments", rate: "points.rate.comments" },
+  ];
+
+  // Total number of rows of a query, read from the content-range header so the
+  // rows themselves never travel over the wire.
+  async function countRows(path) {
+    const res = await supabaseRequest(`${path}${path.includes("?") ? "&" : "?"}limit=1`, {
+      headers: { Prefer: "count=exact", Range: "0-0" },
+    });
+    if (!res.ok) return 0;
+    const n = Number(String(res.headers?.get?.("content-range") || "").split("/")[1]);
+    if (Number.isFinite(n)) return n;
+    return Array.isArray(res.data) ? res.data.length : 0;
+  }
+
+  // How many of each source the member has. `minutes` comes from the profile
+  // row that is already loaded: private_minutes is what the member watched,
+  // public_minutes what was watched through a link they published.
+  async function pointParts(memberId, profile = {}) {
+    const id = restValue(memberId);
+    const minutes = Number(profile.private_minutes || 0) + Number(profile.public_minutes || 0);
+    const [shares, playlists, recommendations, comments] = await Promise.all([
+      countRows(`/rest/v1/post_events?kind=eq.share&member_id=eq.${id}&select=id`),
+      countRows(`/rest/v1/playlists?owner_id=eq.${id}&visibility=in.(public,exclusive)&select=playlist_id`),
+      countRows(
+        `/rest/v1/posts?owner_id=eq.${id}&kind=in.(recommendation,reclist)&visibility=in.(public,exclusive)&select=post_id`
+      ),
+      countRows(`/rest/v1/comments?member_id=eq.${id}&select=id`),
+    ]);
+    return { minutes, shares, playlists, recommendations, comments };
+  }
+
+  // One row per source: what the member has, the rate, and the points it gives.
+  function pointBreakdown(parts) {
+    return POINT_RATES.map((r) => {
+      const count = Number(parts?.[r.key] || 0);
+      return { key: r.key, per: r.per, src: r.src, rate: r.rate, count, points: Math.floor(count / r.per) };
+    });
+  }
+
+  const pointsEarned = (parts) => pointBreakdown(parts).reduce((sum, r) => sum + r.points, 0);
+
+  async function memberPoints(memberId, profile = {}) {
+    const parts = await pointParts(memberId, profile);
+    const breakdown = pointBreakdown(parts);
+    const earned = breakdown.reduce((sum, r) => sum + r.points, 0);
+    const spent = Math.max(0, Number(profile.points_spent || 0));
+    return { parts, breakdown, earned, spent, available: Math.max(0, earned - spent) };
+  }
+
+  // Call a Postgres function (sql/prize_secure.sql). Returns { ok, status, data }.
+  // Failures raised by the function (for example an expired staff session) come back
+  // as ok:false with the message in data.message.
+  async function rpc(name, args = {}) {
+    return supabaseRequest(`/rest/v1/rpc/${name}`, { method: "POST", body: JSON.stringify(args) });
+  }
+
+  // The "how you earn points" panel shared by the prize dialog and dashboard.
+  function pointsHtml(mp) {
+    if (!mp) return "";
+    const rows = mp.breakdown
+      .map(
+        (r) => `
+        <li class="pt-row">
+          <span class="pt-src">
+            <b>${escapeHtml(t(r.src))}</b>
+            <small>${escapeHtml(t(r.rate))}</small>
+          </span>
+          <span class="pt-count">${r.count}</span>
+          <span class="pt-pts">+${r.points}</span>
+        </li>`
+      )
+      .join("");
+    return `
+      <div class="pt-box">
+        <div class="pt-head">
+          <span>${escapeHtml(t("points.title"))}</span>
+          <b class="pt-total">${mp.available}</b>
+        </div>
+        <ul class="pt-list">${rows}</ul>
+        <div class="pt-foot">
+          <span>${escapeHtml(t("points.earned"))} <b>${mp.earned}</b></span>
+          <span>${escapeHtml(t("points.spent"))} <b>${mp.spent}</b></span>
+          <span>${escapeHtml(t("points.available"))} <b>${mp.available}</b></span>
+        </div>
+      </div>`;
+  }
+
   window.CineAura = {
     API_KEY,
     API,
@@ -1498,6 +1650,7 @@
     getLocale,
     applyPrefs,
     translateDom,
+    mountSideToggle,
     hydratePrefsFromProfile,
     adsEligible,
     $,
@@ -1555,6 +1708,14 @@
     posterCard,
     sha256,
     supabaseRequest,
+    POINT_RATES,
+    countRows,
+    pointParts,
+    pointBreakdown,
+    pointsEarned,
+    memberPoints,
+    rpc,
+    pointsHtml,
     normalizeAccountStatus,
     notifyFollowers,
     showAuthGate,

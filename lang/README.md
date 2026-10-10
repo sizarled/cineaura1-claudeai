@@ -1,41 +1,42 @@
 # ملفات اللغة — CineAura language files
 
-كل لغة لها ملف واحد بصيغة `.js` بداخله خريطة الترجمة (كائن جافاسكربت). النص الإنجليزي هو **المفتاح**،
+كل لغة لها ملف واحد بصيغة `.lng` بداخله خريطة الترجمة. النص الإنجليزي هو **المفتاح**،
 لأن الإنجليزية هي اللغة الافتراضية للموقع، والقيمة هي الترجمة:
 
-```js
-(window.CineAuraPacks = window.CineAuraPacks || {}).ar = {
-  "Free": "مجاني",
-  "Search": "بحث",
-  "Movies": "أفلام",
-  "Plans & Pricing": "الباقات والأسعار"
-};
+```
+Free = مجاني
+Search = بحث
+Movies = أفلام
+Series = مسلسلات
+IPTV = الايبي تي في
+Plans & Pricing = الباقات والأسعار
+Support = الدعم
 ```
 
 ## الملفات
 
 | اللغة | الكود | الملف |
 | --- | --- | --- |
-| English (افتراضية) | `en` | `lang/english.js` |
-| العربية | `ar` | `lang/arabic.js` |
-| Français | `fr` | `lang/french.js` |
-| Deutsch | `de` | `lang/german.js` |
-| Español | `es` | `lang/spanish.js` |
-| Nederlands | `nl` | `lang/dutch.js` |
-| Italiano | `it` | `lang/italian.js` |
+| English (افتراضية) | `en` | `lang/english.lng` |
+| العربية | `ar` | `lang/arabic.lng` |
+| Français | `fr` | `lang/french.lng` |
+| Deutsch | `de` | `lang/german.lng` |
+| Español | `es` | `lang/spanish.lng` |
+| Nederlands | `nl` | `lang/dutch.lng` |
+| Italiano | `it` | `lang/italian.lng` |
 
-`english.js` هو القائمة الكاملة للمفاتيح (كل قيمة فيه تساوي مفتاحها)، ويُستخدم كمرجع
+`english.lng` هو القائمة الكاملة للمفاتيح (كل قيمة فيه تساوي مفتاحها)، ويُستخدم كمرجع
 للمفاتيح المتوفرة.
 
 ## الصيغة
 
-* كل ملف يسجّل نفسه في `window.CineAuraPacks[<code>]` كأي كائن جافاسكربت عادي.
-* لا حاجة لـ `fetch` ولا لإعدادات MIME في الاستضافة: الملف يُحمَّل بوسم `<script>`.
+* سطر واحد لكل ترجمة بالشكل: `النص الإنجليزي = الترجمة`.
+* الأسطر التي تبدأ بـ `#` تعليقات ويتم تجاهلها.
+* إذا احتوى المفتاح على علامة `=` تُكتب مسبوقة بشرطة مائلة `\=` (مثال رابط قائمة M3U).
 * أي مفتاح غير موجود في الملف يعود الموقع تلقائيًا إلى النص الإنجليزي.
 * البحث غير حسّاس لحالة الأحرف (`active` تساوي `Active`)، ويتم تجاهل رموز HTML
   (`Plans &amp; Pricing` تُطابق `Plans & Pricing`).
 * مواضع المتغيرات `{n}` و`{name}` و`{date}` تُكتب كما هي في القيمة أيضًا.
-* احرص على الفواصل `,` بين الأسطر، وعلى علامات الاقتباس `"` المزدوجة حول المفاتيح والقيم.
 
 ## ماذا يوجد داخل كل ملف؟
 
@@ -52,11 +53,11 @@
 
 * `js/i18n.js` يحمل فهرس المفاتيح فقط: `مفتاح الواجهة → النص الإنجليزي` (مثال
   `"nav.search": "Search"`). هذا الفهرس هو ما تستخدمه الصفحات: `CineAura.t("nav.search")`.
-* `js/lang.js` يقرأ ملف اللغة الحالية `lang/<language>.js`، يبني منه خريطة
+* `js/lang.js` يقرأ ملف اللغة الحالية `lang/<language>.lng`، يبني منه خريطة
   «إنجليزي → ترجمة»، ثم يعبّئ كل مفاتيح الواجهة بالترجمة، ويكرّر ترجمة الصفحة عند وصول
   الملف.
-* `js/prefs.js` يحمّل ملف اللغة الحالية بشكل متزامن في `<head>` قبل بقية السكربتات، وعند
-  تبديل اللغة من الداشبورد يحقن `lang.js` وسم `<script>` للغة الجديدة ثم يعيد ترجمة الصفحة.
+* الملف يُحفَظ في `localStorage` (المفتاح `cineaura_lng_<code>`) ليعمل الموقع بسرعة عند
+  الزيارة التالية، ثم يُحدَّث من السيرفر عند كل تحميل.
 * إذا فشل تحميل الملف (مثلاً فُتحت الصفحات بدون سيرفر) يبقى الموقع بالإنجليزية.
 
 ### واجهة الاستخدام في الجافاسكربت
@@ -75,27 +76,28 @@ CineAuraLang.load("fr");           // تحميل لغة أخرى (يحدث تل�
 
 ## تعديل ترجمة
 
-افتح ملف اللغة وعدّل القيمة بعد علامة `=`. لا تحتاج أي شيء آخر (تأكد فقط أن الملف ما زال JavaScript صالحًا).
+افتح ملف اللغة وعدّل القيمة بعد علامة `=`. لا تحتاج أي شيء آخر — الملف يُقرأ عند كل
+تحميل للصفحة، وذاكرة المتصفح تُحدَّث تلقائيًا.
 
 ## إضافة لغة جديدة
 
-1. أنشئ ملفًا جديدًا بنفس النسق (يمكن نسخ `english.js`) باسم اللغة، مثل `lang/portuguese.js`.
+1. أنشئ ملفًا جديدًا بنفس النسق (يمكن نسخ `english.lng`) باسم اللغة، مثل `lang/portuguese.lng`.
 2. أضف الكود والملف في `js/lang.js` داخل `FILES`:
 
    ```js
    pt: "portuguese",
    ```
 
-3. أضف الكود `"pt"` إلى قائمة `LANGS` في `js/i18n.js`، وإلى قوائم اللغات (و`files`) في
+3. أضف الكود `"pt"` إلى قائمة `LANGS` في `js/i18n.js`، وإلى قوائم اللغات في
    `js/prefs.js` و`js/common.js` (`LANGS` و`TMDB_LANG` و`LOCALE`).
 4. أضف اسم اللغة في كل ملفات اللغة عند المفتاح `Language` (مثال `English = الإنجليزية`).
 
 ## CineAura language files (English summary)
 
-Every language is one plain-text `.js` map where the English text is the key and the
-value is the translation. `english.js` is the master key list. `js/i18n.js` now holds only
+Every language is one plain-text `.lng` map where the English text is the key and the
+value is the translation. `english.lng` is the master key list. `js/i18n.js` now holds only
 the key → English index used by `CineAura.t()`, while `js/lang.js` loads
-`lang/<language>.js`, fills the dictionary for that language and re-translates the page.
+`lang/<language>.lng`, fills the dictionary for that language and re-translates the page.
 The same map translates text coming from Supabase (`CineAura.tr("Silver")`,
 `CineAuraLang.text("banned")`). Lookups ignore case and HTML entities; missing entries fall
 back to English.

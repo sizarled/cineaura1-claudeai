@@ -29,6 +29,8 @@
     t,
     tr,
     translateDom,
+    getLocale,
+    memberPoints,
   } = window.CineAura;
 
   // Reads always go through; writes need a live session. A member who signed out
@@ -65,6 +67,8 @@
     notes: [],
     postCache: new Map(),
     draft: null,
+    ownPoints: null, // points the signed-in member can spend, once counted
+    ownPointsReq: null,
   };
 
   document.addEventListener("cineaura:prefs", () => {
@@ -78,6 +82,94 @@
     const d = new Date(birth);
     if (Number.isNaN(d.getTime())) return null;
     return Math.max(0, Math.floor((Date.now() - d.getTime()) / (365.25 * 86400000)));
+  }
+
+  // Calendar age of the account: whole years, months and days since it was
+  // created. A month is complete once its day comes round again; a day that the
+  // month does not have (31 January -> 28 February) counts as that month's last day.
+  function daysInMonth(year, month) {
+    return new Date(year, month + 1, 0).getDate();
+  }
+
+  function accountAge(createdAt, now = new Date()) {
+    if (!createdAt) return null;
+    const start = new Date(createdAt);
+    if (Number.isNaN(start.getTime())) return null;
+    // The k-th monthly anniversary of the account.
+    const anniversary = (k) => {
+      const index = start.getMonth() + k;
+      const year = start.getFullYear() + Math.floor(index / 12);
+      const month = ((index % 12) + 12) % 12;
+      const day = Math.min(start.getDate(), daysInMonth(year, month));
+      return new Date(
+        year,
+        month,
+        day,
+        start.getHours(),
+        start.getMinutes(),
+        start.getSeconds(),
+        start.getMilliseconds()
+      );
+    };
+    // The calendar month difference is exact or one too high (the anniversary
+    // day may still be ahead in the current month), so one step back is enough.
+    let months = Math.max(0, (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()));
+    while (months > 0 && anniversary(months) > now) months -= 1;
+    const days = Math.max(0, Math.floor((now - anniversary(months)) / 86400000));
+    return { years: Math.floor(months / 12), months: months % 12, days };
+  }
+
+  // "1 year · 3 months · 12 days" in the page language. Intl writes the plural
+  // forms itself (Arabic: سنة، سنتان، 3 سنوات …) and the digits stay western.
+  function accountAgeText(age) {
+    if (!age) return "—";
+    const unit = (n, name) => {
+      try {
+        return new Intl.NumberFormat(getLocale(), {
+          style: "unit",
+          unit: name,
+          unitDisplay: "long",
+          numberingSystem: "latn",
+        }).format(n);
+      } catch {
+        return `${n} ${name}${n === 1 ? "" : "s"}`;
+      }
+    };
+    return [unit(age.years, "year"), unit(age.months, "month"), unit(age.days, "day")].join(" · ");
+  }
+
+  // Only the signed-in member sees these two numbers: the points they can spend
+  // and how long the account has existed. The points figure is filled in later.
+  function ownStatsHtml() {
+    const age = accountAge(state.hostMember?.created_at);
+    return `
+      <div class="stat-row prof-stats">
+        <div class="stat">
+          <b data-own-points>${escapeHtml(state.ownPoints ?? "…")}</b>
+          <span>${escapeHtml(t("prof.pointsAvail"))}</span>
+        </div>
+        <div class="stat">
+          <b class="prof-age">${escapeHtml(accountAgeText(age))}</b>
+          <span>${escapeHtml(t("prof.accountAge"))}</span>
+        </div>
+      </div>`;
+  }
+
+  // The points the signed-in member can spend (earned minus spent), counted once
+  // per page load. The figure in the stats card is filled in when the counts arrive.
+  function loadOwnPoints() {
+    if (!state.isOwner || !state.hostMember?.member_id || state.ownPointsReq) return;
+    state.ownPointsReq = memberPoints(state.hostMember.member_id, state.host || {})
+      .then((mp) => {
+        state.ownPoints = String(mp.available);
+      })
+      .catch(() => {
+        state.ownPoints = "—";
+      })
+      .then(() => {
+        const el = document.querySelector("[data-own-points]");
+        if (el) el.textContent = state.ownPoints;
+      });
   }
 
   function avatarOf(p, name) {
@@ -140,7 +232,7 @@
     );
     const profile = p.ok && p.data?.[0];
     const m = await supabaseRequest(
-      `/rest/v1/members?username=eq.${restValue(username)}&select=member_id,username,full_name,gender,birth_date,country,status`
+      `/rest/v1/members?username=eq.${restValue(username)}&select=member_id,username,full_name,gender,birth_date,country,status,created_at`
     );
     const member = m.ok && m.data?.[0];
     return { profile, member };
@@ -423,7 +515,10 @@
         ${aside}
         <section class="glass prof-main" id="prof-main"></section>
       </div>`;
-    if (sections.length) hydrateAvatars($("#prof-root"));
+    if (sections.length) {
+      window.CineAura.mountSideToggle($("#prof-root .prof-layout"));
+      hydrateAvatars($("#prof-root"));
+    }
     $("#prof-root").onclick = (e) => {
       const sec = e.target.closest("[data-sec]");
       if (sec) {
@@ -604,6 +699,7 @@
             <button class="btn btn-sm btn-ghost" data-people="followers" type="button">${Number(p.followers||0)} ${t("prof.followers")}</button>
             <button class="btn btn-sm btn-ghost" data-people="following" type="button">${Number(p.following||0)} ${t("prof.followingN")}</button>
           </p>
+          ${state.isOwner ? ownStatsHtml() : ""}
           <div class="prof-share">${shareRowHtml(profileHref(m.username || ""), `@${m.username || ""} · CineAura`, { compact: true })}</div>
         </div>
         <div class="prof-actions" id="prof-actions"></div>
@@ -614,6 +710,7 @@
       </div>
       <div id="home-body"></div>`;
     drawOwnerActions();
+    if (state.isOwner) loadOwnPoints();
     main.querySelectorAll("[data-status]").forEach((b) => { b.onclick = () => openStatusModal(b.dataset.status); });
     main.querySelectorAll("[data-htab]").forEach((b) => {
       b.onclick = () => {

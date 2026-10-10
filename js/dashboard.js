@@ -205,17 +205,10 @@
     (owned.ok && Array.isArray(owned.data) ? owned.data : []).forEach((r) => {
       if (r.viewer_id !== state.member.member_id) pub += Number(r.minutes || 0);
     });
-    const wins = await supabaseRequest(
-      `/rest/v1/winners?member_id=eq.${restValue(state.member.member_id)}&select=minutes_paid`
-    );
-    let spent = (wins.ok && Array.isArray(wins.data) ? wins.data : []).reduce(
-      (a, w) => a + Number(w.minutes_paid || 0),
-      0
-    );
-    const takePriv = Math.min(priv, spent);
-    priv -= takePriv;
-    spent -= takePriv;
-    pub = Math.max(0, pub - spent);
+    // Prizes are no longer paid by shrinking the watch minutes: what a member
+    // spent lives in profiles.points_spent, and winners.minutes_paid is kept
+    // only as a record of what each prize cost. Subtracting it here as well
+    // would charge every claim twice.
     await supabaseRequest(`/rest/v1/profiles?member_id=eq.${restValue(state.member.member_id)}`, {
       method: "PATCH",
       body: JSON.stringify({ private_minutes: priv, public_minutes: pub }),
@@ -282,6 +275,7 @@
         <section class="glass dash-main" id="dash-main"></section>
       </div>`;
     $("#dash-root").onclick = onShellClick;
+    C.mountSideToggle($("#dash-root .dash-layout"));
     hydrateAvatars($("#dash-root"));
     renderSection();
   }
@@ -1445,7 +1439,11 @@
       return true;
     });
     const mine = wins.ok && Array.isArray(wins.data) ? wins.data : [];
-    const total = Number(state.profile?.private_minutes || 0) + Number(state.profile?.public_minutes || 0);
+    // Prizes are paid in points: watch minutes, link shares, playlists,
+    // recommendations and comments, each at its own rate.
+    const mp = await C.memberPoints(state.member.member_id, state.profile || {});
+    const total = mp.available;
+    const minutes = Number(state.profile?.private_minutes || 0) + Number(state.profile?.public_minutes || 0);
     const groups = {};
     list.forEach((p) => {
       groups[p.group_name] = groups[p.group_name] || [];
@@ -1454,7 +1452,9 @@
     main.innerHTML = `
       <p class="eyebrow">${t("dash.rewards")}</p>
       <h1>${t("dash.prizes")}</h1>
-      <div class="stat"><b>${total}</b><span>${t("dash.totalPrivPub")}</span></div>
+      <div class="stat"><b>${total}</b><span>${t("points.available")}</span></div>
+      <div style="margin-top:14px">${C.pointsHtml(mp)}</div>
+      <p class="muted" style="margin-top:10px">${t("dash.totalPrivPub")}: <b>${minutes}</b></p>
       <div class="cards" style="margin-top:16px">${
         Object.keys(groups).length
           ? Object.entries(groups).map(([g, arr]) => `
@@ -1470,7 +1470,7 @@
         <div class="mini-card" style="margin-bottom:10px">
           <h3>${escapeHtml(p.title)}</h3>
           <p class="muted">${escapeHtml(p.description||"")}</p>
-          <p>${p.minutes_required} minutes · ${p.winners_count||0}/${p.winners_needed||1} winners · ${p.group_name||""}</p>
+          <p>${escapeHtml(t("prize.points", { n: p.minutes_required }))} · ${p.winners_count||0}/${p.winners_needed||1} winners · ${escapeHtml(p.group_name||"")}</p>
           <button class="btn btn-sm btn-primary" data-claim="${escapeHtml(p.title)}" ${total>=p.minutes_required?"":"disabled"} type="button">${t("dash.requestPrize")}</button>
         </div>`).join("") || `<p class="empty">${t("dash.noPrizes")}</p>`}</div>
       <h2 style="margin:22px 0 10px">${t("dash.yourPrizes")}</h2>
@@ -1480,23 +1480,20 @@
       if (!btn || btn.disabled) return;
       const prize = list.find((p) => p.title === btn.dataset.claim);
       if (!prize) return;
-      if (!confirm(t("dash.confirmPrize", { n: prize.minutes_required, title: prize.title }))) return;
-      const paid = prize.minutes_required;
-      const priv = Math.max(0, Number(state.profile.private_minutes || 0) - paid);
-      await supabaseRequest(`/rest/v1/profiles?member_id=eq.${restValue(state.member.member_id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ private_minutes: priv }),
-      });
-      state.profile.private_minutes = priv;
-      await supabaseRequest("/rest/v1/winners", {
-        method: "POST",
-        body: JSON.stringify({
-          prize_title: prize.title,
-          member_id: state.member.member_id,
-          minutes_paid: paid,
-          group_name: prize.group_name,
-        }),
-      });
+      let paid = prize.minutes_required;
+      // The server checks the dates, quantity, audience and balance and spends the points
+      // in one locked step. Prizes with subscription modes are claimed through their gift mode.
+      const modes = await supabaseRequest(`/rest/v1/prize_modes?prize_id=eq.${prize.id}&select=mode,points_cost`);
+      const hasModes = modes.ok && Array.isArray(modes.data) && modes.data.length;
+      const gift = hasModes ? modes.data.find((m) => m.mode === "gift") : null;
+      if (hasModes && !gift) return toast(t("dash.prizeFail"));
+      if (gift) paid = gift.points_cost;
+      if (!confirm(t("dash.confirmPrize", { n: paid, title: prize.title }))) return;
+      const res = hasModes
+        ? await C.rpc("prize_join", { p_member: state.member.member_id, p_prize: prize.id, p_mode: "gift", p_code: null })
+        : await C.rpc("prize_claim_simple", { p_member: state.member.member_id, p_prize: prize.id });
+      if (!res.ok || !res.data?.ok) return toast(t("dash.prizeFail"));
+      state.profile.points_spent = Number(state.profile.points_spent || 0) + Number(res.data.cost ?? paid);
       toast(t("dash.prizeOk"));
       viewPrizes(main);
     };

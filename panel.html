@@ -4,8 +4,7 @@
   <meta charset="UTF-8" />
   <script src="js/prefs.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Activate — CineAura</title>
-  <noscript><meta http-equiv="refresh" content="0;url=https://clickanlook.space/noscript" /></noscript>
+  <title data-i18n-title="nav.panel">Panel — CineAura</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230d253f'/%3E%3Cpolygon points='26,18 48,32 26,46' fill='%2390cea1'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -13,8 +12,8 @@
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/pages.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
-  <script>window.adblockRedirect = "https://clickanlook.space/adblock";</script>
-  <script type="text/javascript" id="cpljs-13897974-6da6-11f1-a2d7-8a5fb7be40ea" src="https://clickanlook.space/iframeLoader/13897974-6da6-11f1-a2d7-8a5fb7be40ea?allow_translate=1"></script>
+  <link rel="stylesheet" href="css/panel.css" />
+  <link rel="stylesheet" href="css/panel-prizes.css" />
   <link rel="stylesheet" href="css/facebook.css" />
   <link rel="stylesheet" href="css/mobile.css" />
 </head>
@@ -58,12 +57,20 @@
         <button class="hamburger" id="hamburger" type="button" data-i18n-aria="nav.openMenu" aria-label="Open menu"><span></span><span></span><span></span></button>
       </div>
     </header>
-    <main class="page-main" id="activate-root"></main>
+    <div class="mobile-menu" id="mobile-menu">
+      <a href="./login.html" data-i18n="nav.signin">Sign In</a>
+      <a href="./register.html" data-i18n="nav.signup">Sign Up</a>
+      <a href="./dashboard.html" data-i18n="nav.dashboard">Dashboard</a>
+      <div class="mobile-auth-user"><button type="button" data-logout data-i18n="nav.logout">Log Out</button></div>
+    </div>
+    <main class="page-main" id="panel-root"></main>
   </div>
   <div class="toast" id="toast" role="status"></div>
   <script src="js/i18n.js"></script>
   <script src="js/lang.js"></script>
   <script src="js/common.js"></script>
-  <script src="js/activate.js"></script>
+  <script src="js/prize-rules.js"></script>
+  <script src="js/panel-prizes.js"></script>
+  <script src="js/panel.js"></script>
 </body>
 </html>
